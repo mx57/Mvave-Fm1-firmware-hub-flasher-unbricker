@@ -1,5 +1,8 @@
 package com.example.ui.components
 
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.util.LruCache
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -10,7 +13,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,9 +41,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -53,6 +57,182 @@ import com.example.ui.theme.SynthAmberWarn
 import com.example.ui.theme.SynthCyan
 import com.example.ui.theme.SynthOrange
 import com.example.ui.theme.SynthPhosphor
+
+private val firmwareScreenBitmapCache = object : LruCache<String, ImageBitmap>(64) {}
+
+/**
+ * Returns the exact bundled asset path for a firmware's authentic OLED/TFT display screenshot
+ * (`assets/fw_screens/<id>.png`). Every single one of the 160 firmwares has its own dedicated screen file.
+ */
+fun resolveFirmwareScreenAssetPath(firmware: FirmwareEntity): String {
+    val cleanId = firmware.id.lowercase().trim()
+    return "fw_screens/$cleanId.png"
+}
+
+/**
+ * Loads and caches the authentic per-firmware screen PNG from `assets/fw_screens/<id>.png`.
+ */
+fun loadFirmwareScreenAssetBitmap(context: Context, firmware: FirmwareEntity): ImageBitmap? {
+    val assetPath = resolveFirmwareScreenAssetPath(firmware)
+    firmwareScreenBitmapCache.get(assetPath)?.let { return it }
+    return try {
+        context.assets.open(assetPath).use { inputStream ->
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            bitmap?.asImageBitmap()?.also { imageBitmap ->
+                firmwareScreenBitmapCache.put(assetPath, imageBitmap)
+            }
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/**
+ * Per-firmware signature accent color from TheFirmwareHub.com (`LOOK` palette).
+ */
+fun resolveFirmwareAccentColor(firmware: FirmwareEntity): Color {
+    return when (firmware.id.lowercase().trim()) {
+        "mvave_fm1_stock_v16_unbrick" -> SynthPhosphor
+        "fm1open" -> Color(0xFFF2C230)
+        "baudgirl" -> Color(0xFFFF3FA4)
+        "dinghy" -> Color(0xFF8F62F0)
+        "felucca" -> Color(0xFFAFD9F4)
+        "sloop" -> Color(0xFFE6D1B9)
+        "sloopdx" -> Color(0xFF42F5F5)
+        "zp12" -> Color(0xFFFF6A3D)
+        "x0x", "x0x37" -> Color(0xFFF4C0CB)
+        "x0xrmx" -> Color(0xFFC9A6E8)
+        "fomni", "fomni37" -> Color(0xFFC9B6FF)
+        "salt" -> Color(0xFFFF8F7A)
+        "choralroot" -> Color(0xFFFFC46B)
+        "jangada" -> Color(0xFFFF5FC8)
+        "melodee" -> Color(0xFF8FE3B0)
+        "hortator" -> Color(0xFFD8DDE6)
+        "hortator-bt" -> Color(0xFF9FC4FF)
+        "fimba" -> Color(0xFFF0A35E)
+        "ghoulbox" -> Color(0xFFFFB000)
+        "jiant" -> Color(0xFFFF7A00)
+        "bubba" -> Color(0xFFFFC83D)
+        "floyd" -> Color(0xFFFFB347)
+        "sloopbanks" -> Color(0xFF7FD4FF)
+        "waveloop" -> Color(0xFFB58CFF)
+        "chord" -> Color(0xFFF2564E)
+        "fumi" -> Color(0xFFB08A5A)
+        "maku", "maku37" -> Color(0xFFF0806A)
+        "rainbow", "rainbow37" -> Color(0xFFFFD23F)
+        "obervave" -> Color(0xFF3C82EB)
+        "shineon" -> Color(0xFFF5A524)
+        "pigeon" -> Color(0xFFB49CFF)
+        "cs1" -> Color(0xFFF2A93B)
+        "hyp1" -> Color(0xFFA35CFF)
+        "tonitor" -> Color(0xFF00D6FF)
+        "noizdemons" -> Color(0xFF7DFF3C)
+        "coralflower" -> Color(0xFFFF7AA8)
+        "mc1" -> Color(0xFFFF8A1E)
+        "beetle" -> Color(0xFFFF3AD0)
+        "min1" -> Color(0xFF3F7BE0)
+        "purplemonkey" -> Color(0xFF9B5CFF)
+        "gammawave" -> Color(0xFFFFB800)
+        "tuna" -> Color(0xFF3DB7E4)
+        "frodhes" -> Color(0xFFE8A33D)
+        "fomajam" -> Color(0xFFA3E635)
+        "kawa" -> Color(0xFFD9579C)
+        "nmsfm" -> Color(0xFF00A632)
+        "fm1quest" -> Color(0xFFF2C373)
+        "grimm" -> Color(0xFFCD3018)
+        "fmini" -> Color(0xFFE0A458)
+        "chipbox" -> Color(0xFFA8C61A)
+        "clipper" -> Color(0xFF3D8BF2)
+        "loom" -> Color(0xFFE3B23C)
+        "monk" -> Color(0xFFE0603A)
+        "flyfish" -> Color(0xFF3FA9F5)
+        "bytemania" -> Color(0xFFFF4F8B)
+        "mutable" -> Color(0xFFF0875A)
+        "dub" -> Color(0xFF3FB6A8)
+        "ketch" -> Color(0xFFF2C94C)
+        "fmel" -> Color(0xFFC98A5A)
+        "zen" -> Color(0xFFF4A6C0)
+        "golana" -> Color(0xFFF5A54A)
+        "golanadz" -> Color(0xFFE8873A)
+        "modelar" -> Color(0xFFFF3D9A)
+        "niagara" -> Color(0xFFFF2A2A)
+        "unholy" -> Color(0xFFC0392B)
+        "emb" -> Color(0xFFB5651D)
+        "cutador" -> Color(0xFFF0A030)
+        "hera" -> Color(0xFF1EA7F2)
+        "frasil" -> Color(0xFF5CC8F5)
+        "tessera" -> Color(0xFFECB848)
+        "drift" -> Color(0xFFE6E6E6)
+        "delrio" -> Color(0xFFE5733A)
+        "carnac" -> Color(0xFFD6963C)
+        "sidou" -> Color(0xFFA77BFF)
+        "mono2k" -> Color(0xFFF2F1EC)
+        "caravel" -> Color(0xFFF7A21B)
+        "midimon" -> Color(0xFF39BA62)
+        "makohai" -> Color(0xFF5AD1E0)
+        "estampie" -> Color(0xFFC4452E)
+        "fizz" -> Color(0xFF4A9DFF)
+        "matryoshka" -> Color(0xFFF5A300)
+        "loomfm1" -> Color(0xFFB040FF)
+        "tastywaves" -> Color(0xFF9B7BFF)
+        "arctic" -> Color(0xFF7FD6E8)
+        "s1vave" -> Color(0xFF2AD4A0)
+        "gator" -> Color(0xFFFF2E6E)
+        "monohull" -> Color(0xFFF5A623)
+        "perf1" -> Color(0xFFF2B84B)
+        "j6" -> Color(0xFF2F8FD8)
+        "guitchordi" -> Color(0xFFFF8A3D)
+        "ravel" -> Color(0xFFE05A6A)
+        "berlinan" -> Color(0xFFF28C28)
+        "mnm1" -> Color(0xFF90E4F0)
+        "mope1" -> Color(0xFF6FA3B8)
+        "kitten" -> Color(0xFFA35CF5)
+        "nauclerus" -> Color(0xFFE8742A)
+        "ptfm" -> Color(0xFF4FD6E0)
+        "spampy" -> Color(0xFFFF4FC0)
+        "spellbox" -> Color(0xFFE06A2C)
+        "dungeontracker" -> Color(0xFF7FD88A)
+        "nachtfahrt" -> Color(0xFFC48CFF)
+        "daurade" -> Color(0xFF5AB4FF)
+        "sill" -> Color(0xFFFF3FA4)
+        "kwasub" -> Color(0xFF3FDC5A)
+        "luxr" -> Color(0xFFF2A33A)
+        "fmdj" -> Color(0xFF9BBC0F)
+        "fm1gm" -> Color(0xFF4AA3DF)
+        "386dx" -> Color(0xFFF5D63A)
+        "opn1" -> Color(0xFFE8303A)
+        "sid1" -> Color(0xFF8F7FE0)
+        "minitone" -> Color(0xFF22B8A5)
+        "fm1sid" -> Color(0xFF6C8CD5)
+        "morpheus" -> Color(0xFF3CCF6E)
+        "bunker" -> Color(0xFF9D7BE8)
+        "amb" -> Color(0xFFF6D79A)
+        "ctl" -> Color(0xFFEF4A33)
+        "winampfm" -> Color(0xFF5B7BFF)
+        "mycelium" -> Color(0xFF9CCCE4)
+        "polly" -> Color(0xFF7B93E0)
+        "etch" -> Color(0xFFCFCFCF)
+        "fm106" -> Color(0xFF2A9FD6)
+        "tribe" -> Color(0xFFFC6C54)
+        "duell" -> Color(0xFFE6E6E6)
+        "skiff" -> Color(0xFFFCB424)
+        "fart" -> Color(0xFF84CC9C)
+        "orbit" -> Color(0xFF4F7FF0)
+        "felucca8", "felucca-smk" -> Color(0xFFAFD9F4)
+        "vector37" -> Color(0xFF5FC48A)
+        "makkuro37" -> Color(0xFFD0524F)
+        "speak37" -> Color(0xFF38BDF8)
+        "erik37" -> Color(0xFFF59E0B)
+        "snoop37" -> Color(0xFFE6D1B9)
+        else -> when {
+            firmware.isOfficialStock -> SynthPhosphor
+            firmware.category == FirmwareCategory.GROOVEBOX.name -> SynthOrange
+            firmware.category == FirmwareCategory.CHIPTUNE.name -> SynthAmberWarn
+            firmware.category == FirmwareCategory.AMBIENT.name -> SynthPhosphor
+            else -> SynthCyan
+        }
+    }
+}
 
 @DrawableRes
 fun resolveFirmwareInterfaceDrawable(firmware: FirmwareEntity): Int {
@@ -85,26 +265,25 @@ fun resolveFirmwareInterfaceDrawable(firmware: FirmwareEntity): Int {
 }
 
 /**
- * Displays the authentic interface screenshot of each firmware from TheFirmwareHub.com
- * bundled directly in app resources for 100% offline work, with tap-to-zoom lightbox inspection.
+ * Displays the authentic unique interface screenshot of each of the 160 firmwares from TheFirmwareHub.com
+ * bundled directly in `assets/fw_screens/<id>.png` for 100% offline work, with tap-to-zoom lightbox inspection.
  */
 @Composable
 fun FirmwareArtworkBanner(
     firmware: FirmwareEntity,
     modifier: Modifier = Modifier
 ) {
-    val interfaceDrawableRes = remember(firmware.id, firmware.category) {
+    val context = LocalContext.current
+    val screenBitmap = remember(firmware.id) {
+        loadFirmwareScreenAssetBitmap(context, firmware)
+    }
+    val fallbackDrawableRes = remember(firmware.id, firmware.category) {
         resolveFirmwareInterfaceDrawable(firmware)
     }
-    var showZoomDialog by remember { mutableStateOf(false) }
-
-    val accentColor = when {
-        firmware.isOfficialStock -> SynthPhosphor
-        firmware.category == FirmwareCategory.GROOVEBOX.name -> SynthOrange
-        firmware.category == FirmwareCategory.CHIPTUNE.name -> SynthAmberWarn
-        firmware.category == FirmwareCategory.AMBIENT.name -> SynthPhosphor
-        else -> SynthCyan
+    val accentColor = remember(firmware.id, firmware.category, firmware.isOfficialStock) {
+        resolveFirmwareAccentColor(firmware)
     }
+    var showZoomDialog by remember { mutableStateOf(false) }
 
     if (showZoomDialog) {
         Dialog(onDismissRequest = { showZoomDialog = false }) {
@@ -122,12 +301,12 @@ fun FirmwareArtworkBanner(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Интерфейс: ${firmware.name}",
+                                text = "Экран прошивки: ${firmware.name}",
                                 style = MaterialTheme.typography.titleLarge,
                                 color = accentColor
                             )
                             Text(
-                                text = "${firmware.version} • Автор: ${firmware.author}",
+                                text = "${firmware.version} • Автор: ${firmware.author} • ID: ${firmware.id}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -151,14 +330,25 @@ fun FirmwareArtworkBanner(
                             .background(Color(0xFF07080A)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Image(
-                            painter = painterResource(id = interfaceDrawableRes),
-                            contentDescription = "Полный интерфейс прошивки ${firmware.name}",
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(8.dp),
-                            contentScale = ContentScale.Fit
-                        )
+                        if (screenBitmap != null) {
+                            Image(
+                                bitmap = screenBitmap,
+                                contentDescription = "Полный интерфейс прошивки ${firmware.name}",
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(8.dp),
+                                contentScale = ContentScale.Fit
+                            )
+                        } else {
+                            Image(
+                                painter = painterResource(id = fallbackDrawableRes),
+                                contentDescription = "Полный интерфейс прошивки ${firmware.name}",
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(8.dp),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -176,12 +366,12 @@ fun FirmwareArtworkBanner(
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .height(176.dp)
+            .height(184.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable { showZoomDialog = true },
         shape = RoundedCornerShape(12.dp),
         color = Color(0xFF0E0C0D),
-        border = BorderStroke(1.5.dp, accentColor.copy(alpha = 0.6f))
+        border = BorderStroke(1.5.dp, accentColor.copy(alpha = 0.72f))
     ) {
         Box(
             modifier = Modifier
@@ -189,91 +379,28 @@ fun FirmwareArtworkBanner(
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
-                            accentColor.copy(alpha = 0.16f),
+                            accentColor.copy(alpha = 0.18f),
                             Color(0xFF0E0C0D)
                         )
                     )
                 )
         ) {
-            if (firmware.isOfficialStock) {
-                val stockBadge = when {
-                    firmware.version.contains("16") -> "V16"
-                    firmware.version.contains("14") -> "V14"
-                    else -> "V15"
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Surface(
-                        color = Color(0xFF091410),
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(2.dp, SynthPhosphor),
-                        modifier = Modifier
-                            .width(136.dp)
-                            .fillMaxHeight()
-                    ) {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.Center,
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "M-VAVE",
-                                fontFamily = JetBrainsMonoFontFamily,
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = stockBadge,
-                                style = MaterialTheme.typography.displayLarge,
-                                color = SynthPhosphor,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "FACTORY ROM",
-                                fontFamily = JetBrainsMonoFontFamily,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = SynthPhosphor
-                            )
-                        }
-                    }
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = "ШТАТНЫЙ ИНТЕРФЕЙС M-VAVE FM-1 ($stockBadge)",
-                            fontFamily = JetBrainsMonoFontFamily,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = SynthPhosphor
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "Заводской OLED-экран: 64 FM-пресета, выбор алгоритма, арпеджиатор и USB-MIDI SysEx загрузчик.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Безопасное смещение: 0x00004000",
-                            fontFamily = JetBrainsMonoFontFamily,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = SynthCyan
-                        )
-                    }
-                }
-            } else {
+            if (screenBitmap != null) {
                 Image(
-                    painter = painterResource(id = interfaceDrawableRes),
+                    bitmap = screenBitmap,
                     contentDescription = "Экран интерфейса прошивки ${firmware.name}",
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(vertical = 8.dp, horizontal = 12.dp),
+                        .padding(vertical = 8.dp, horizontal = 10.dp),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Image(
+                    painter = painterResource(id = fallbackDrawableRes),
+                    contentDescription = "Экран интерфейса прошивки ${firmware.name}",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(vertical = 8.dp, horizontal = 10.dp),
                     contentScale = ContentScale.Fit
                 )
             }
@@ -291,7 +418,7 @@ fun FirmwareArtworkBanner(
                     Icon(
                         imageVector = Icons.Default.OfflinePin,
                         contentDescription = "Статус образа",
-                        tint = if (firmware.isDownloaded) SynthPhosphor else SynthCyan,
+                        tint = if (firmware.isDownloaded) SynthPhosphor else accentColor,
                         modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
@@ -299,11 +426,11 @@ fun FirmwareArtworkBanner(
                         text = if (firmware.isDownloaded) {
                             "${firmware.id.uppercase()} • .BIN СКАЧАН"
                         } else {
-                            "${firmware.id.uppercase()} • OLED UI"
+                            "${firmware.id.uppercase()} • ЭКРАН UI"
                         },
                         fontFamily = JetBrainsMonoFontFamily,
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (firmware.isDownloaded) SynthPhosphor else SynthCyan
+                        color = if (firmware.isDownloaded) SynthPhosphor else accentColor
                     )
                 }
             }

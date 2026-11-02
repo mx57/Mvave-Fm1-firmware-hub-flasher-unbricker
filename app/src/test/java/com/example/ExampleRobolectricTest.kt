@@ -78,4 +78,21 @@ class ExampleRobolectricTest {
             assertTrue(expected.message.orEmpty().contains("USB OTG"))
         }
     }
+
+    @Test
+    fun `all 160 firmwares have unique bundled screen images in assets`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val entities = com.example.data.TheFirmwareHubCatalogData.CACHED_ENTITIES
+        assertEquals(160, entities.size)
+
+        val uniquePaths = mutableSetOf<String>()
+        entities.forEach { fw ->
+            val assetPath = com.example.ui.components.resolveFirmwareScreenAssetPath(fw)
+            assertTrue("Duplicate asset path $assetPath", uniquePaths.add(assetPath))
+            val bytes = context.assets.open(assetPath).use { it.readBytes() }
+            assertTrue("Empty screen image for ${fw.id}", bytes.size > 100)
+        }
+        assertEquals(160, uniquePaths.size)
+    }
 }
+

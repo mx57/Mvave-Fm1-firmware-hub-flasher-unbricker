@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Piano
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Star
@@ -74,6 +75,7 @@ fun FirmwareDetailScreen(
     onToggleFavorite: (FirmwareEntity) -> Unit,
     onDownloadFirmware: (FirmwareEntity, String, Int) -> Unit,
     onExportFirmwareToDevice: (FirmwareEntity) -> Unit,
+    onOpenInEmulator: (FirmwareEntity) -> Unit,
     onOpenInFlasher: (FirmwareEntity) -> Unit,
     onOpenInChecksumInspector: (FirmwareEntity) -> Unit
 ) {
@@ -337,6 +339,32 @@ fun FirmwareDetailScreen(
                             } else {
                                 "СКАЧАТЬ, ОТКРЫТЬ И ПРОШИТЬ (0x00004000)"
                             },
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Launch Hardware & DSP Emulator Button
+                    Button(
+                        onClick = { onOpenInEmulator(firmware) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("detail_open_emulator_button"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = SynthCyan,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Piano,
+                            contentDescription = "Открыть в эмуляторе"
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "ТЕСТИРОВАТЬ ЗВУК И OLED В ЭМУЛЯТОРЕ FM-1",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )

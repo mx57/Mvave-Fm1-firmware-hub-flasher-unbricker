@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Healing
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Piano
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -70,6 +71,7 @@ import com.example.ui.AppDestination
 import com.example.ui.FirmwareHubViewModel
 import com.example.ui.screens.BackupsAndChecksumScreen
 import com.example.ui.screens.CatalogScreen
+import com.example.ui.screens.EmulatorScreen
 import com.example.ui.screens.FirmwareDetailScreen
 import com.example.ui.screens.FlasherScreen
 import com.example.ui.screens.LogsAndDocsScreen
@@ -94,6 +96,7 @@ class MainActivity : ComponentActivity() {
 
 private fun destinationIcon(destination: AppDestination): ImageVector = when (destination) {
     AppDestination.CATALOG -> Icons.Default.LibraryMusic
+    AppDestination.EMULATOR -> Icons.Default.Piano
     AppDestination.FLASHER -> Icons.Default.Bolt
     AppDestination.UNBRICKER -> Icons.Default.Healing
     AppDestination.BACKUPS -> Icons.Default.VerifiedUser
@@ -136,6 +139,7 @@ fun FirmwareHubApp(
     val logs by viewModel.filteredLogs.collectAsStateWithLifecycle()
     val selectedLogLevel by viewModel.selectedLogLevelFilter.collectAsStateWithLifecycle()
     val selectedDesktopOs by viewModel.selectedDesktopOs.collectAsStateWithLifecycle()
+    val emulatorState by viewModel.emulatorUiState.collectAsStateWithLifecycle()
 
     // Real-time BroadcastReceiver for physical USB OTG attach, detach, and permission grant events
     DisposableEffect(context) {
@@ -203,6 +207,15 @@ fun FirmwareHubApp(
     // SAF CreateDocument launcher for exporting/saving any downloaded .bin firmware to device storage
     val exportBinLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.writePendingExportToUri(uri)
+        }
+    }
+
+    // SAF CreateDocument launcher for exporting recorded .wav audio from the emulator
+    val exportWavLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("audio/wav")
     ) { uri ->
         if (uri != null) {
             viewModel.writePendingExportToUri(uri)
@@ -380,6 +393,9 @@ fun FirmwareHubApp(
                                                 exportBinLauncher.launch(suggestedName)
                                             }
                                         },
+                                        onOpenInEmulator = { fw ->
+                                            viewModel.openFirmwareInEmulator(fw)
+                                        },
                                         onOpenInFlasher = { fw ->
                                             viewModel.selectFirmwareForInspection(
                                                 firmware = fw,
@@ -429,6 +445,9 @@ fun FirmwareHubApp(
                                         onOpenFirmwareDetail = { fw ->
                                             viewModel.openFirmwareDetail(fw)
                                         },
+                                        onOpenFirmwareInEmulator = { fw ->
+                                            viewModel.openFirmwareInEmulator(fw)
+                                        },
                                         onSelectFirmwareForFlash = { fw ->
                                             viewModel.selectFirmwareForInspection(fw, navigateToFlasher = true)
                                         },
@@ -438,6 +457,37 @@ fun FirmwareHubApp(
                                     )
                                 }
                             }
+
+                            AppDestination.EMULATOR -> EmulatorScreen(
+                                emulatorState = emulatorState,
+                                allFirmwares = firmwares,
+                                onSelectActiveSlot = viewModel::selectActiveEmulatorSlot,
+                                onAssignFirmwareToSlot = viewModel::assignFirmwareToEmulatorSlot,
+                                onSelectPresetIndex = viewModel::selectEmulatorPreset,
+                                onSelectEngineType = viewModel::selectEmulatorEngineType,
+                                onSelectOledPage = viewModel::selectEmulatorOledPage,
+                                onSelectOledDisplayMode = viewModel::selectEmulatorOledDisplayMode,
+                                onUpdateKnobParameter = viewModel::updateEmulatorKnob,
+                                onToggleSequencerPlay = viewModel::toggleEmulatorSequencerPlay,
+                                onSelectPatternIndex = viewModel::selectEmulatorPattern,
+                                onToggleStepEditMode = viewModel::toggleEmulatorStepEditMode,
+                                onToggleStepActive = viewModel::toggleEmulatorStepActive,
+                                onSelectStepForNoteEdit = viewModel::selectEmulatorStepForNoteEdit,
+                                onCycleArpMode = viewModel::cycleEmulatorArpMode,
+                                onChangeOctave = viewModel::changeEmulatorOctave,
+                                onPadNoteOn = viewModel::triggerEmulatorPadOn,
+                                onPadNoteOff = viewModel::triggerEmulatorPadOff,
+                                onToggleWavRecording = viewModel::toggleEmulatorWavRecording,
+                                onExportRecordedWav = {
+                                    viewModel.prepareExportRecordedWav { suggestedWavName ->
+                                        exportWavLauncher.launch(suggestedWavName)
+                                    }
+                                },
+                                onOpenActiveFirmwareInFlasher = { fw ->
+                                    viewModel.selectFirmwareForInspection(fw, navigateToFlasher = true)
+                                },
+                                onStopAudioOnLeave = viewModel::releaseEmulatorHeldNotes
+                            )
 
                             AppDestination.FLASHER -> FlasherScreen(
                                 selectedFirmware = selectedFirmware,

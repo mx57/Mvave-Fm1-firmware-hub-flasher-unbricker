@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.OpenInFull
+import androidx.compose.material.icons.filled.Piano
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
@@ -116,6 +117,7 @@ fun CatalogScreen(
     onExportFirmwareFile: (FirmwareEntity) -> Unit,
     onImportLocalFile: () -> Unit,
     onOpenFirmwareDetail: (FirmwareEntity) -> Unit,
+    onOpenFirmwareInEmulator: (FirmwareEntity) -> Unit,
     onSelectFirmwareForFlash: (FirmwareEntity) -> Unit,
     onOpenUnbricker: () -> Unit
 ) {
@@ -554,6 +556,7 @@ fun CatalogScreen(
                     onDownloadBinary = { onDownloadSingleFirmware(firmware) },
                     onExportBinary = { onExportFirmwareFile(firmware) },
                     onOpenDetailScreen = { onOpenFirmwareDetail(firmware) },
+                    onOpenInEmulator = { onOpenFirmwareInEmulator(firmware) },
                     onSelectForFlash = { onSelectFirmwareForFlash(firmware) }
                 )
             }
@@ -569,6 +572,7 @@ private fun FirmwareCatalogCard(
     onDownloadBinary: () -> Unit,
     onExportBinary: () -> Unit,
     onOpenDetailScreen: () -> Unit,
+    onOpenInEmulator: () -> Unit,
     onSelectForFlash: () -> Unit
 ) {
     var expandedDetails by remember { mutableStateOf(false) }
@@ -958,7 +962,7 @@ private fun FirmwareCatalogCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Action Buttons Row: Download/Export .bin + Flash
+            // Action Buttons Row: Download/Export .bin + Emulator + Flash
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -967,7 +971,7 @@ private fun FirmwareCatalogCard(
                 OutlinedButton(
                     onClick = if (firmware.isDownloaded) onExportBinary else onDownloadBinary,
                     modifier = Modifier
-                        .weight(1f)
+                        .weight(0.95f)
                         .testTag("download_fw_${firmware.id}"),
                     border = BorderStroke(
                         1.dp,
@@ -978,12 +982,35 @@ private fun FirmwareCatalogCard(
                         imageVector = if (firmware.isDownloaded) Icons.Default.SaveAlt else Icons.Default.Download,
                         contentDescription = if (firmware.isDownloaded) "Экспорт .bin" else "Скачать .bin",
                         tint = if (firmware.isDownloaded) SynthCyan else SynthPhosphor,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (firmware.isDownloaded) "Экспорт .bin" else "Скачать .bin",
+                        text = if (firmware.isDownloaded) "Экспорт" else "Скачать",
                         color = if (firmware.isDownloaded) SynthCyan else SynthPhosphor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onOpenInEmulator,
+                    modifier = Modifier
+                        .weight(1.05f)
+                        .testTag("emulate_fw_${firmware.id}"),
+                    border = BorderStroke(1.dp, SynthCyan)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Piano,
+                        contentDescription = "Тест в эмуляторе",
+                        tint = SynthCyan,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Эмулятор",
+                        color = SynthCyan,
+                        fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -992,7 +1019,7 @@ private fun FirmwareCatalogCard(
                 Button(
                     onClick = onSelectForFlash,
                     modifier = Modifier
-                        .weight(1.25f)
+                        .weight(1.15f)
                         .testTag("select_fw_${firmware.id}"),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (firmware.isOfficialStock) SynthPhosphor else SynthOrange,
@@ -1002,11 +1029,11 @@ private fun FirmwareCatalogCard(
                     Icon(
                         imageVector = if (firmware.isOfficialStock) Icons.Default.Security else Icons.Default.Bolt,
                         contentDescription = "Открыть и прошить",
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (firmware.isOfficialStock) "Unbrick / Сток" else "Открыть и прошить",
+                        text = if (firmware.isOfficialStock) "Unbrick" else "Прошить",
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis

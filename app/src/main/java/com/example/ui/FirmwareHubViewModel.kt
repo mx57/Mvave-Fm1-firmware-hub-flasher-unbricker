@@ -16,6 +16,14 @@ import com.example.domain.ChecksumEngine
 import com.example.domain.ChecksumReport
 import com.example.domain.ConnectedUsbDeviceInfo
 import com.example.domain.FlashStepProgress
+import com.example.domain.EmulatorArpMode
+import com.example.domain.EmulatorFirmwareProfile
+import com.example.domain.EmulatorOledDisplayMode
+import com.example.domain.EmulatorOledPage
+import com.example.domain.EmulatorSynthEngineType
+import com.example.domain.Fm1DspEmulatorEngine
+import com.example.domain.Fm1FirmwareSoundProfiler
+import com.example.domain.SequencerStep
 import com.example.domain.UnbrickMethodType
 import com.example.domain.UnbrickTargetFirmwareOption
 import com.example.domain.UnbrickUiMode
@@ -39,10 +47,46 @@ import java.util.Locale
 
 enum class AppDestination(val title: String) {
     CATALOG("Каталог"),
+    EMULATOR("Эмулятор"),
     FLASHER("Прошивка"),
     UNBRICKER("Unbricker"),
     BACKUPS("Бэкапы"),
     LOGS_DOCS("Логи")
+}
+
+enum class EmulatorSlot(val title: String) {
+    SLOT_A("Слот A"),
+    SLOT_B("Слот B")
+}
+
+data class EmulatorUiState(
+    val activeSlot: EmulatorSlot = EmulatorSlot.SLOT_A,
+    val slotAFirmware: FirmwareEntity? = null,
+    val slotBFirmware: FirmwareEntity? = null,
+    val activeProfile: EmulatorFirmwareProfile? = null,
+    val activeEngineType: EmulatorSynthEngineType = EmulatorSynthEngineType.FM_4OP,
+    val selectedPresetIndex: Int = 0,
+    val selectedPatternIndex: Int = 0,
+    val selectedOledPage: EmulatorOledPage = EmulatorOledPage.OSC_FM,
+    val oledDisplayMode: EmulatorOledDisplayMode = EmulatorOledDisplayMode.AUTHENTIC_SKIN_HUD,
+    val parameters: List<Float> = List(16) { 0.5f },
+    val sequencerSteps: List<SequencerStep> = List(16) { SequencerStep(it, active = true) },
+    val isSequencerPlaying: Boolean = false,
+    val currentStepIndex: Int = 0,
+    val isStepEditMode: Boolean = false,
+    val selectedStepForEdit: Int = 0,
+    val arpMode: EmulatorArpMode = EmulatorArpMode.OFF,
+    val baseOctave: Int = 4,
+    val activePadSemitones: Set<Int> = emptySet(),
+    val lastTriggeredNoteMidi: Int = -1,
+    val waveformSamples: List<Float> = List(128) { 0f },
+    val peakLevel: Float = 0f,
+    val isRecordingWav: Boolean = false,
+    val recordedDurationSec: Float = 0f,
+    val lastRecordedWavBytes: ByteArray? = null
+) {
+    val activeFirmware: FirmwareEntity?
+        get() = if (activeSlot == EmulatorSlot.SLOT_A) slotAFirmware else slotBFirmware
 }
 
 enum class SortOption(val label: String) {
@@ -161,6 +205,35 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
     private val _selectedDesktopOs = MutableStateFlow("WINDOWS_PS")
     val selectedDesktopOs: StateFlow<String> = _selectedDesktopOs.asStateFlow()
 
+    // Hardware & DSP Firmware Emulator state
+    private val _emulatorUiState = MutableStateFlow(EmulatorUiState())
+    val emulatorUiState: StateFlow<EmulatorUiState> = _emulatorUiState.asStateFlow()
+
+    private val dspEmulatorEngine: Fm1DspEmulatorEngine = Fm1DspEmulatorEngine(
+        externalScope = viewModelScope,
+        onStepChanged = { stepIdx, midiNote ->
+            _emulatorUiState.update { state ->
+                state.copy(
+                    currentStepIndex = stepIdx,
+                    lastTriggeredNoteMidi = if (midiNote > 0) midiNote else state.lastTriggeredNoteMidi
+                )
+            }
+        },
+        onScopeUpdated = { samples, peak, recordedSec ->
+            _emulatorUiState.update { state ->
+                state.copy(
+                    waveformSamples = samples.toList(),
+                    peakLevel = peak,
+                    recordedDurationSec = if (state.isRecordingWav) {
+                        recordedSec
+                    } else {
+                        state.recordedDurationSec
+                    }
+                )
+            }
+        }
+    )
+
     val totalCatalogCount: StateFlow<Int> = repository.allFirmwares
         .map { it.size }
         .stateIn(
@@ -219,6 +292,18 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             }
         } else if (sorted.isNotEmpty()) {
             selectFirmwareForInspection(sorted.first(), navigateToFlasher = false)
+        }
+
+        // Seed Emulator Slot A and Slot B with initial distinct firmwares if not set yet
+        if (_emulatorUiState.value.slotAFirmware == null && list.isNotEmpty()) {
+            val defaultA = list.firstOrNull { it.id.equals("sloop", ignoreCase = true) }
+                ?: list.firstOrNull { !it.isOfficialStock }
+                ?: list.first()
+            val defaultB = list.firstOrNull { it.id.equals("x0x", ignoreCase = true) }
+                ?: list.firstOrNull { it.id.equals("fm1sid", ignoreCase = true) }
+                ?: list.lastOrNull()
+                ?: defaultA
+            initializeEmulatorSlotsIfNeeded(defaultA, defaultB)
         }
         sorted
     }.stateIn(
@@ -1434,5 +1519,307 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             "[$time] [${entry.level}] [${entry.tag}] ${entry.message}$hexPart"
         }
         return "$header\n$body\n"
+    }
+
+    // =========================================================================
+    // M-VAVE FM-1 Hardware & Real-Time DSP Firmware Emulator Actions
+    // =========================================================================
+
+    private fun initializeEmulatorSlotsIfNeeded(slotA: FirmwareEntity, slotB: FirmwareEntity) {
+        val profileA = Fm1FirmwareSoundProfiler.buildProfile(slotA)
+        val firstPreset = profileA.presets.first()
+        val firstPattern = profileA.patterns.first()
+        dspEmulatorEngine.applyPreset(firstPreset)
+        dspEmulatorEngine.setSequencerPattern(firstPattern.steps, firstPattern.bpm)
+        _emulatorUiState.update {
+            it.copy(
+                activeSlot = EmulatorSlot.SLOT_A,
+                slotAFirmware = slotA,
+                slotBFirmware = slotB,
+                activeProfile = profileA,
+                activeEngineType = firstPreset.engineType,
+                selectedPresetIndex = 0,
+                selectedPatternIndex = 0,
+                parameters = dspEmulatorEngine.getParametersSnapshot().toList(),
+                sequencerSteps = firstPattern.steps
+            )
+        }
+    }
+
+    fun openFirmwareInEmulator(firmware: FirmwareEntity) {
+        _selectedFirmware.value = firmware
+        _isShowingFirmwareDetail.value = false
+        assignFirmwareToEmulatorSlot(_emulatorUiState.value.activeSlot, firmware)
+        _currentDestination.value = AppDestination.EMULATOR
+        _statusBannerMessage.value =
+            "Эмулятор M-VAVE FM-1: загружена прошивка «${firmware.name} (${firmware.version})» — нажмите клавиши P1–P16 или PLAY DEMO SEQ."
+    }
+
+    fun selectActiveEmulatorSlot(slot: EmulatorSlot) {
+        val currentState = _emulatorUiState.value
+        val targetFw = if (slot == EmulatorSlot.SLOT_A) {
+            currentState.slotAFirmware
+        } else {
+            currentState.slotBFirmware
+        } ?: return
+
+        val profile = Fm1FirmwareSoundProfiler.buildProfile(targetFw)
+        val presetIdx = currentState.selectedPresetIndex.coerceIn(0, profile.presets.lastIndex)
+        val preset = profile.presets[presetIdx]
+        val patIdx = currentState.selectedPatternIndex.coerceIn(0, profile.patterns.lastIndex)
+        val pattern = profile.patterns[patIdx]
+
+        dspEmulatorEngine.applyPreset(preset)
+        dspEmulatorEngine.setSequencerPattern(pattern.steps, pattern.bpm)
+
+        _emulatorUiState.update {
+            it.copy(
+                activeSlot = slot,
+                activeProfile = profile,
+                activeEngineType = preset.engineType,
+                selectedPresetIndex = presetIdx,
+                selectedPatternIndex = patIdx,
+                parameters = dspEmulatorEngine.getParametersSnapshot().toList(),
+                sequencerSteps = pattern.steps
+            )
+        }
+
+        viewModelScope.launch {
+            repository.log(
+                level = "INFO",
+                tag = "EMU-AB-SWITCH",
+                message = "A/B переключение эмулятора -> ${slot.title}: ${targetFw.name} (${targetFw.version}) [${preset.engineType.code}]",
+                hexPayload = "CRC32=${targetFw.crc32}"
+            )
+        }
+    }
+
+    fun assignFirmwareToEmulatorSlot(slot: EmulatorSlot, firmware: FirmwareEntity) {
+        val profile = Fm1FirmwareSoundProfiler.buildProfile(firmware)
+        val preset = profile.presets.first()
+        val pattern = profile.patterns.first()
+
+        dspEmulatorEngine.applyPreset(preset)
+        dspEmulatorEngine.setSequencerPattern(pattern.steps, pattern.bpm)
+
+        _emulatorUiState.update { state ->
+            state.copy(
+                activeSlot = slot,
+                slotAFirmware = if (slot == EmulatorSlot.SLOT_A) firmware else state.slotAFirmware,
+                slotBFirmware = if (slot == EmulatorSlot.SLOT_B) firmware else state.slotBFirmware,
+                activeProfile = profile,
+                activeEngineType = preset.engineType,
+                selectedPresetIndex = 0,
+                selectedPatternIndex = 0,
+                parameters = dspEmulatorEngine.getParametersSnapshot().toList(),
+                sequencerSteps = pattern.steps
+            )
+        }
+
+        viewModelScope.launch {
+            repository.log(
+                level = "INFO",
+                tag = "EMU-LOAD-FW",
+                message = "В ${slot.title} эмулятора загружен образ «${firmware.name} (${firmware.version})» — синтез ${preset.engineType.title}",
+                hexPayload = "OFFSET=${firmware.flashOffsetHex} CRC32=${firmware.crc32}"
+            )
+        }
+    }
+
+    fun selectEmulatorPreset(presetIndex: Int) {
+        val profile = _emulatorUiState.value.activeProfile ?: return
+        val idx = presetIndex.coerceIn(0, profile.presets.lastIndex)
+        val preset = profile.presets[idx]
+        dspEmulatorEngine.applyPreset(preset)
+        _emulatorUiState.update {
+            it.copy(
+                selectedPresetIndex = idx,
+                activeEngineType = preset.engineType,
+                parameters = dspEmulatorEngine.getParametersSnapshot().toList()
+            )
+        }
+    }
+
+    fun selectEmulatorEngineType(engineType: EmulatorSynthEngineType) {
+        dspEmulatorEngine.setEngineType(engineType)
+        _emulatorUiState.update { it.copy(activeEngineType = engineType) }
+    }
+
+    fun selectEmulatorOledPage(page: EmulatorOledPage) {
+        _emulatorUiState.update { it.copy(selectedOledPage = page) }
+    }
+
+    fun selectEmulatorOledDisplayMode(mode: EmulatorOledDisplayMode) {
+        _emulatorUiState.update { it.copy(oledDisplayMode = mode) }
+    }
+
+    fun updateEmulatorKnob(knobIndexOnPage: Int, normalizedValue: Float) {
+        val page = _emulatorUiState.value.selectedOledPage
+        val paramIndex = (page.index * 4 + knobIndexOnPage).coerceIn(0, 15)
+        val clamped = normalizedValue.coerceIn(0f, 1f)
+        dspEmulatorEngine.setParameter(paramIndex, clamped)
+        _emulatorUiState.update { state ->
+            val updated = state.parameters.toMutableList()
+            if (paramIndex in updated.indices) {
+                updated[paramIndex] = clamped
+            }
+            state.copy(parameters = updated)
+        }
+    }
+
+    fun toggleEmulatorSequencerPlay() {
+        val nextPlaying = !_emulatorUiState.value.isSequencerPlaying
+        dspEmulatorEngine.setSequencerPlaying(nextPlaying)
+        _emulatorUiState.update {
+            it.copy(isSequencerPlaying = nextPlaying)
+        }
+    }
+
+    fun selectEmulatorPattern(patternIndex: Int) {
+        val profile = _emulatorUiState.value.activeProfile ?: return
+        val idx = patternIndex.coerceIn(0, profile.patterns.lastIndex)
+        val pattern = profile.patterns[idx]
+        dspEmulatorEngine.setSequencerPattern(pattern.steps, pattern.bpm)
+        _emulatorUiState.update {
+            it.copy(
+                selectedPatternIndex = idx,
+                sequencerSteps = pattern.steps,
+                parameters = dspEmulatorEngine.getParametersSnapshot().toList()
+            )
+        }
+    }
+
+    fun toggleEmulatorStepEditMode() {
+        _emulatorUiState.update { it.copy(isStepEditMode = !it.isStepEditMode) }
+    }
+
+    fun toggleEmulatorStepActive(stepIndex: Int) {
+        val currentSteps = _emulatorUiState.value.sequencerSteps.toMutableList()
+        if (stepIndex !in currentSteps.indices) return
+        val old = currentSteps[stepIndex]
+        val updated = old.copy(active = !old.active)
+        currentSteps[stepIndex] = updated
+        dspEmulatorEngine.updateSingleStep(stepIndex, updated)
+        _emulatorUiState.update {
+            it.copy(
+                sequencerSteps = currentSteps,
+                selectedStepForEdit = stepIndex
+            )
+        }
+    }
+
+    fun selectEmulatorStepForNoteEdit(stepIndex: Int) {
+        if (stepIndex !in 0..15) return
+        val current = _emulatorUiState.value
+        if (current.selectedStepForEdit == stepIndex) {
+            toggleEmulatorStepActive(stepIndex)
+        } else {
+            _emulatorUiState.update { it.copy(selectedStepForEdit = stepIndex) }
+        }
+    }
+
+    fun cycleEmulatorArpMode() {
+        val modes = EmulatorArpMode.entries
+        val next = modes[(_emulatorUiState.value.arpMode.ordinal + 1) % modes.size]
+        dspEmulatorEngine.setArpMode(next)
+        _emulatorUiState.update { it.copy(arpMode = next) }
+    }
+
+    fun changeEmulatorOctave(newOctave: Int) {
+        val clamped = newOctave.coerceIn(2, 6)
+        dspEmulatorEngine.setBaseOctave(clamped)
+        _emulatorUiState.update { it.copy(baseOctave = clamped) }
+    }
+
+    fun triggerEmulatorPadOn(semitoneIndex: Int) {
+        val state = _emulatorUiState.value
+        if (state.isStepEditMode) {
+            val editIdx = state.selectedStepForEdit.coerceIn(0, 15)
+            val stepsMutable = state.sequencerSteps.toMutableList()
+            val updatedStep = stepsMutable[editIdx].copy(
+                active = true,
+                semitoneOffset = semitoneIndex
+            )
+            stepsMutable[editIdx] = updatedStep
+            dspEmulatorEngine.updateSingleStep(editIdx, updatedStep)
+            val nextEditIdx = (editIdx + 1) % 16
+            _emulatorUiState.update {
+                it.copy(
+                    sequencerSteps = stepsMutable,
+                    selectedStepForEdit = nextEditIdx
+                )
+            }
+        }
+
+        val midi = dspEmulatorEngine.triggerPadNoteOn(semitoneIndex)
+        _emulatorUiState.update {
+            it.copy(
+                activePadSemitones = it.activePadSemitones + semitoneIndex,
+                lastTriggeredNoteMidi = midi
+            )
+        }
+    }
+
+    fun triggerEmulatorPadOff(semitoneIndex: Int) {
+        dspEmulatorEngine.triggerPadNoteOff(semitoneIndex)
+        _emulatorUiState.update {
+            it.copy(activePadSemitones = it.activePadSemitones - semitoneIndex)
+        }
+    }
+
+    fun toggleEmulatorWavRecording() {
+        val isRec = _emulatorUiState.value.isRecordingWav
+        if (!isRec) {
+            dspEmulatorEngine.startWavRecording()
+            _emulatorUiState.update {
+                it.copy(
+                    isRecordingWav = true,
+                    recordedDurationSec = 0f,
+                    lastRecordedWavBytes = null
+                )
+            }
+            _statusBannerMessage.value =
+                "Запись звука эмулятора (.WAV 44.1 кГц / 16-бит) начата — играйте на пэдах или запустите секвенсор."
+        } else {
+            val wavBytes = dspEmulatorEngine.stopWavRecordingAndBuildFile()
+            val dur = dspEmulatorEngine.getRecordedDurationSeconds()
+            _emulatorUiState.update {
+                it.copy(
+                    isRecordingWav = false,
+                    recordedDurationSec = dur,
+                    lastRecordedWavBytes = wavBytes
+                )
+            }
+            viewModelScope.launch {
+                val fwName = _emulatorUiState.value.activeFirmware?.name ?: "FM1"
+                repository.log(
+                    level = "SUCCESS",
+                    tag = "EMU-WAV-REC",
+                    message = "Записан аудио-сэмпл эмулятора прошивки «$fwName» (${wavBytes.size / 1024} КБ, RIFF WAVE 44.1 kHz)",
+                    hexPayload = "SIZE=${wavBytes.size}"
+                )
+            }
+            _statusBannerMessage.value =
+                "Запись WAV завершена (${wavBytes.size / 1024} КБ). Нажмите «Скачать .WAV», чтобы сохранить файл."
+        }
+    }
+
+    fun prepareExportRecordedWav(launchCreateWavDocument: (suggestedFileName: String) -> Unit) {
+        val wavBytes = _emulatorUiState.value.lastRecordedWavBytes ?: return
+        val fw = _emulatorUiState.value.activeFirmware
+        val cleanId = fw?.id ?: "fm1_synth"
+        pendingExportBytes = wavBytes
+        pendingExportFirmwareName = "Аудиозапись эмулятора ${fw?.name ?: "FM-1"} (.wav)"
+        launchCreateWavDocument("${cleanId}_emulator_capture.wav")
+    }
+
+    fun releaseEmulatorHeldNotes() {
+        dspEmulatorEngine.allNotesOff()
+        _emulatorUiState.update { it.copy(activePadSemitones = emptySet()) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        dspEmulatorEngine.stopEngine()
     }
 }

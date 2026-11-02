@@ -1,4 +1,2 @@
-76f656eb3dc1723c91b9d0ebc3d632017d6cffc31b063db3b377f9ee3687766f  releases/FM1-FirmwareHub-Unbricker-v1.0-debug.apk
-76f656eb3dc1723c91b9d0ebc3d632017d6cffc31b063db3b377f9ee3687766f  releases/FM1-FirmwareHub-Unbricker-v2.0-160fw-debug.apk
-76f656eb3dc1723c91b9d0ebc3d632017d6cffc31b063db3b377f9ee3687766f  releases/FM1-FirmwareHub-Unbricker-v3.0-6methods-debug.apk
-# Release v3.0 — 6-Method Unbricker Suite + SCSI CBW/CSW + wl82loader SRAM + 160 Firmwares
+d3c3f7d6f9f3a30fc03cf463c9032e145eb1333d48658ba7e3a45b51494067dd  releases/FM1-FirmwareHub-Unbricker-v4.0-emulator-debug.apk
+# Release v4.0 — Interactive M-VAVE FM-1 Hardware & DSP Firmware Emulator (44.1 kHz PCM) + 6-Method Unbricker Suite + 160 Firmwares

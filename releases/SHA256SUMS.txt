@@ -1,1 +1,3 @@
-d47fcc06b6da0689794a69c0543c253bf55d19a6d07e5a26fd1afa5d0c23e75e  releases/FM1-FirmwareHub-Unbricker-v1.0-debug.apk
+e75238d33467cd946942e8d962ad8e4a90953a985d9df4e8f908f91656282d26  releases/FM1-FirmwareHub-Unbricker-v1.0-debug.apk
+e75238d33467cd946942e8d962ad8e4a90953a985d9df4e8f908f91656282d26  releases/FM1-FirmwareHub-Unbricker-v2.0-160fw-debug.apk
+# CRC32: 079B843A | Size: 19291099 bytes (18.40 MB)

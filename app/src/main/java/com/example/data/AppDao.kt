@@ -14,6 +14,12 @@ interface AppDao {
     @Query("SELECT * FROM firmwares ORDER BY isOfficialStock DESC, isFavorite DESC, releaseDate DESC")
     fun getAllFirmwares(): Flow<List<FirmwareEntity>>
 
+    @Query("SELECT * FROM firmwares")
+    suspend fun getAllFirmwaresSnapshot(): List<FirmwareEntity>
+
+    @Query("SELECT * FROM firmwares WHERE id = :id LIMIT 1")
+    suspend fun getFirmwareById(id: String): FirmwareEntity?
+
     @Query("SELECT COUNT(*) FROM firmwares")
     suspend fun getFirmwareCount(): Int
 

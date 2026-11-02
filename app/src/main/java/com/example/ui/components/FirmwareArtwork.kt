@@ -58,14 +58,14 @@ import com.example.ui.theme.SynthPhosphor
 fun resolveFirmwareInterfaceDrawable(firmware: FirmwareEntity): Int {
     val cleanId = firmware.id.lowercase().trim()
     return when {
-        cleanId == "sloop" || cleanId.startsWith("sloop") -> R.drawable.fw_ui_sloop
-        cleanId == "felucca" || cleanId.startsWith("felucca") -> R.drawable.fw_ui_felucca
+        cleanId == "sloop" || cleanId == "sloopdx" || cleanId.startsWith("sloop") -> R.drawable.fw_ui_sloop
+        cleanId == "felucca" || cleanId == "felucca_salt" || cleanId.startsWith("felucca") -> R.drawable.fw_ui_felucca
         cleanId == "zp12" -> R.drawable.fw_ui_zp12
         cleanId == "x0x" || cleanId.contains("303") || cleanId.contains("acid") -> R.drawable.fw_ui_x0x
-        cleanId == "jiant" -> R.drawable.fw_ui_jiant
-        cleanId == "melodee" -> R.drawable.fw_ui_melodee
-        cleanId == "skiff" -> R.drawable.fw_ui_skiff
-        cleanId == "obervave" -> R.drawable.fw_ui_obervave
+        cleanId == "jiant" || cleanId == "bubba" -> R.drawable.fw_ui_jiant
+        cleanId == "melodee" || cleanId == "fimba1" -> R.drawable.fw_ui_melodee
+        cleanId == "skiff" || cleanId == "jangada" || cleanId == "waveloop" -> R.drawable.fw_ui_skiff
+        cleanId == "obervave" || cleanId == "fm106" || cleanId == "hortator" -> R.drawable.fw_ui_obervave
         cleanId == "amb" || cleanId.contains("mutable") -> R.drawable.fw_ui_amb
         cleanId == "ghoulbox" -> R.drawable.fw_ui_ghoulbox
         cleanId == "choralroot" -> R.drawable.fw_ui_choralroot
@@ -196,7 +196,11 @@ fun FirmwareArtworkBanner(
                 )
         ) {
             if (firmware.isOfficialStock) {
-                // Official M-VAVE Factory Screen Representation (matching thefirmwarehub.com's V15/V16 slot)
+                val stockBadge = when {
+                    firmware.version.contains("16") -> "V16"
+                    firmware.version.contains("14") -> "V14"
+                    else -> "V15"
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxSize()
@@ -224,7 +228,7 @@ fun FirmwareArtworkBanner(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                text = if (firmware.version.contains("16")) "V16" else "V15",
+                                text = stockBadge,
                                 style = MaterialTheme.typography.displayLarge,
                                 color = SynthPhosphor,
                                 fontWeight = FontWeight.Bold
@@ -243,7 +247,7 @@ fun FirmwareArtworkBanner(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = "ШТАТНЫЙ ИНТЕРФЕЙС M-VAVE FM-1",
+                            text = "ШТАТНЫЙ ИНТЕРФЕЙС M-VAVE FM-1 ($stockBadge)",
                             fontFamily = JetBrainsMonoFontFamily,
                             style = MaterialTheme.typography.labelSmall,
                             color = SynthPhosphor
@@ -264,7 +268,6 @@ fun FirmwareArtworkBanner(
                     }
                 }
             } else {
-                // Real Firmware Screen Interface from TheFirmwareHub.com
                 Image(
                     painter = painterResource(id = interfaceDrawableRes),
                     contentDescription = "Экран интерфейса прошивки ${firmware.name}",
@@ -275,7 +278,7 @@ fun FirmwareArtworkBanner(
                 )
             }
 
-            // Top-Left Offline Badge
+            // Top-Left Offline & Downloaded Status Badge
             Surface(
                 color = Color(0xD90A0D12),
                 shape = RoundedCornerShape(bottomEnd = 10.dp),
@@ -287,18 +290,41 @@ fun FirmwareArtworkBanner(
                 ) {
                     Icon(
                         imageVector = Icons.Default.OfflinePin,
-                        contentDescription = "Экран прошивки сохранен офлайн",
-                        tint = SynthPhosphor,
+                        contentDescription = "Статус образа",
+                        tint = if (firmware.isDownloaded) SynthPhosphor else SynthCyan,
                         modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "ИНТЕРФЕЙС ПРОШИВКИ • OFFLINE",
+                        text = if (firmware.isDownloaded) {
+                            "${firmware.id.uppercase()} • .BIN СКАЧАН"
+                        } else {
+                            "${firmware.id.uppercase()} • OLED UI"
+                        },
                         fontFamily = JetBrainsMonoFontFamily,
                         style = MaterialTheme.typography.labelSmall,
-                        color = SynthPhosphor
+                        color = if (firmware.isDownloaded) SynthPhosphor else SynthCyan
                     )
                 }
+            }
+
+            // Bottom-Left OLED Synth Identity Badge
+            Surface(
+                color = Color(0xD90A0D12),
+                shape = RoundedCornerShape(topEnd = 10.dp),
+                modifier = Modifier.align(Alignment.BottomStart)
+            ) {
+                Text(
+                    text = "${firmware.name} (${firmware.version}) • ${firmware.author}",
+                    fontFamily = JetBrainsMonoFontFamily,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .width(210.dp)
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                )
             }
 
             // Bottom-Right Tap-to-Zoom Pill

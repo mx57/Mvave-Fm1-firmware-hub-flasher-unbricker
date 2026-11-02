@@ -62,6 +62,7 @@ import com.example.ui.AppDestination
 import com.example.ui.FirmwareHubViewModel
 import com.example.ui.screens.BackupsAndChecksumScreen
 import com.example.ui.screens.CatalogScreen
+import com.example.ui.screens.FirmwareDetailScreen
 import com.example.ui.screens.FlasherScreen
 import com.example.ui.screens.LogsAndDocsScreen
 import com.example.ui.screens.UnbrickerScreen
@@ -98,12 +99,18 @@ fun FirmwareHubApp(
     val context = LocalContext.current
 
     val currentDestination by viewModel.currentDestination.collectAsStateWithLifecycle()
+    val isShowingFirmwareDetail by viewModel.isShowingFirmwareDetail.collectAsStateWithLifecycle()
     val firmwares by viewModel.filteredFirmwares.collectAsStateWithLifecycle()
+    val totalCatalogCount by viewModel.totalCatalogCount.collectAsStateWithLifecycle()
+    val downloadedCatalogCount by viewModel.downloadedCatalogCount.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
     val sortOption by viewModel.sortOption.collectAsStateWithLifecycle()
     val onlyFavorites by viewModel.onlyFavorites.collectAsStateWithLifecycle()
     val isSyncingHub by viewModel.isSyncingHub.collectAsStateWithLifecycle()
+    val isDownloadingFirmware by viewModel.isDownloadingFirmware.collectAsStateWithLifecycle()
+    val isDownloadingAll by viewModel.isDownloadingAll.collectAsStateWithLifecycle()
+    val batchDownloadStatus by viewModel.batchDownloadStatus.collectAsStateWithLifecycle()
     val statusBanner by viewModel.statusBannerMessage.collectAsStateWithLifecycle()
 
     val useSimulationMode by viewModel.useSimulationMode.collectAsStateWithLifecycle()
@@ -120,9 +127,13 @@ fun FirmwareHubApp(
     val selectedLogLevel by viewModel.selectedLogLevelFilter.collectAsStateWithLifecycle()
     val selectedDesktopOs by viewModel.selectedDesktopOs.collectAsStateWithLifecycle()
 
-    // BackHandler on secondary destinations to return to Catalog
-    BackHandler(enabled = currentDestination != AppDestination.CATALOG) {
-        viewModel.navigateTo(AppDestination.CATALOG)
+    // BackHandler on FirmwareDetailScreen or secondary destinations
+    BackHandler(enabled = isShowingFirmwareDetail || currentDestination != AppDestination.CATALOG) {
+        if (isShowingFirmwareDetail) {
+            viewModel.closeFirmwareDetail()
+        } else {
+            viewModel.navigateTo(AppDestination.CATALOG)
+        }
     }
 
     // File picker launcher for importing local .bin / .fw / .fwsc / .syx firmware files
@@ -138,6 +149,15 @@ fun FirmwareHubApp(
                 }
             }
             viewModel.importLocalFirmwareUri(uri, fileName)
+        }
+    }
+
+    // SAF CreateDocument launcher for exporting/saving any downloaded .bin firmware to device storage
+    val exportBinLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.writePendingExportToUri(uri)
         }
     }
 
@@ -166,7 +186,7 @@ fun FirmwareHubApp(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "${connectedDevice.vidPidHex} • ${if (useSimulationMode) "SIMULATION READY" else "USB OTG HOST"}",
+                                text = "${connectedDevice.vidPidHex} • Каталог: $totalCatalogCount прошивок (Скачано: $downloadedCatalogCount)",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (useSimulationMode) SynthCyan else SynthPhosphor
                             )
@@ -287,30 +307,81 @@ fun FirmwareHubApp(
 
                     Box(modifier = Modifier.fillMaxSize()) {
                         when (currentDestination) {
-                            AppDestination.CATALOG -> CatalogScreen(
-                                firmwares = firmwares,
-                                searchQuery = searchQuery,
-                                selectedCategory = selectedCategory,
-                                sortOption = sortOption,
-                                onlyFavorites = onlyFavorites,
-                                isSyncingHub = isSyncingHub,
-                                connectedDevice = connectedDevice,
-                                onSearchQueryChange = viewModel::updateSearchQuery,
-                                onSelectCategory = viewModel::selectCategory,
-                                onSelectSort = viewModel::selectSortOption,
-                                onToggleOnlyFavorites = viewModel::toggleOnlyFavorites,
-                                onToggleFavoriteFirmware = viewModel::toggleFavoriteFirmware,
-                                onSyncHub = viewModel::syncCatalogWithTheFirmwareHub,
-                                onImportLocalFile = {
-                                    filePickerLauncher.launch(arrayOf("*/*"))
-                                },
-                                onSelectFirmwareForFlash = { fw ->
-                                    viewModel.selectFirmwareForInspection(fw, navigateToFlasher = true)
-                                },
-                                onOpenUnbricker = {
-                                    viewModel.navigateTo(AppDestination.UNBRICKER)
+                            AppDestination.CATALOG -> {
+                                val detailFw = selectedFirmware
+                                if (isShowingFirmwareDetail && detailFw != null) {
+                                    FirmwareDetailScreen(
+                                        firmware = detailFw,
+                                        checksumReport = checksumReport,
+                                        isDownloading = isDownloadingFirmware,
+                                        onBackToCatalog = viewModel::closeFirmwareDetail,
+                                        onToggleFavorite = viewModel::toggleFavoriteFirmware,
+                                        onDownloadFirmware = { fw, ver, size ->
+                                            viewModel.downloadSingleFirmware(fw, ver, size)
+                                        },
+                                        onExportFirmwareToDevice = { fw ->
+                                            viewModel.prepareExportFirmwareFile(fw) { suggestedName ->
+                                                exportBinLauncher.launch(suggestedName)
+                                            }
+                                        },
+                                        onOpenInFlasher = { fw ->
+                                            viewModel.selectFirmwareForInspection(
+                                                firmware = fw,
+                                                navigateToFlasher = true
+                                            )
+                                        },
+                                        onOpenInChecksumInspector = { fw ->
+                                            viewModel.selectFirmwareForInspection(
+                                                firmware = fw,
+                                                navigateToFlasher = false,
+                                                navigateToChecksums = true
+                                            )
+                                        }
+                                    )
+                                } else {
+                                    CatalogScreen(
+                                        firmwares = firmwares,
+                                        totalCatalogCount = totalCatalogCount,
+                                        downloadedCount = downloadedCatalogCount,
+                                        searchQuery = searchQuery,
+                                        selectedCategory = selectedCategory,
+                                        sortOption = sortOption,
+                                        onlyFavorites = onlyFavorites,
+                                        isSyncingHub = isSyncingHub,
+                                        isDownloadingAll = isDownloadingAll,
+                                        batchDownloadStatus = batchDownloadStatus,
+                                        connectedDevice = connectedDevice,
+                                        onSearchQueryChange = viewModel::updateSearchQuery,
+                                        onSelectCategory = viewModel::selectCategory,
+                                        onSelectSort = viewModel::selectSortOption,
+                                        onToggleOnlyFavorites = viewModel::toggleOnlyFavorites,
+                                        onResetAllFilters = viewModel::resetAllCatalogFilters,
+                                        onToggleFavoriteFirmware = viewModel::toggleFavoriteFirmware,
+                                        onSyncHub = viewModel::syncCatalogWithTheFirmwareHub,
+                                        onDownloadAllFirmwares = viewModel::downloadAllCatalogFirmwares,
+                                        onDownloadSingleFirmware = { fw ->
+                                            viewModel.downloadSingleFirmware(fw)
+                                        },
+                                        onExportFirmwareFile = { fw ->
+                                            viewModel.prepareExportFirmwareFile(fw) { suggestedName ->
+                                                exportBinLauncher.launch(suggestedName)
+                                            }
+                                        },
+                                        onImportLocalFile = {
+                                            filePickerLauncher.launch(arrayOf("*/*"))
+                                        },
+                                        onOpenFirmwareDetail = { fw ->
+                                            viewModel.openFirmwareDetail(fw)
+                                        },
+                                        onSelectFirmwareForFlash = { fw ->
+                                            viewModel.selectFirmwareForInspection(fw, navigateToFlasher = true)
+                                        },
+                                        onOpenUnbricker = {
+                                            viewModel.navigateTo(AppDestination.UNBRICKER)
+                                        }
+                                    )
                                 }
-                            )
+                            }
 
                             AppDestination.FLASHER -> FlasherScreen(
                                 selectedFirmware = selectedFirmware,

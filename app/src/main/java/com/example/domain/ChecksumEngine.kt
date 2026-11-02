@@ -45,8 +45,8 @@ object ChecksumEngine {
         targetOffsetHex: String = "0x00004000",
         declaredSizeBytes: Int = 262144
     ): ByteArray {
-        // Use a compact 32KB representative binary slice for fast in-memory cryptographic verification
-        val actualLength = declaredSizeBytes.coerceIn(16384, 65536)
+        // Use a compact 16KB (4 NOR sectors) binary slice for fast in-memory cryptographic verification across all 160 firmwares
+        val actualLength = declaredSizeBytes.coerceIn(8192, 16384)
         val buffer = ByteBuffer.allocate(actualLength).order(ByteOrder.LITTLE_ENDIAN)
 
         // JieLi AC791N / WL82 Firmware Partition Magic Header ("JLWL82FM")

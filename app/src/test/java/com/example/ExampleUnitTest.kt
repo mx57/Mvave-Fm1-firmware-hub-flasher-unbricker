@@ -1,5 +1,7 @@
 package com.example
 
+import com.example.data.AppDatabase
+import com.example.data.FirmwareVersionHistoryCodec
 import com.example.domain.ChecksumEngine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -41,5 +43,17 @@ class ExampleUnitTest {
 
         assertTrue(report.startsWithBootHeaderHazard)
         assertTrue(report.targetOffsetHex.contains("0x00004000"))
+    }
+
+    @Test
+    fun defaultCatalog_containsFull160FirmwaresWithVersionHistoryAndHardwareRevs() {
+        val catalog = AppDatabase.buildDefaultCatalog()
+        assertEquals(160, catalog.size)
+        catalog.forEach { fw ->
+            assertTrue(fw.releaseNotes.isNotBlank())
+            assertTrue(fw.compatibleHardwareRevs.isNotBlank())
+            val versions = FirmwareVersionHistoryCodec.decode(fw.versionHistoryJson, fw)
+            assertTrue("Expected version history for ${fw.id}", versions.isNotEmpty())
+        }
     }
 }

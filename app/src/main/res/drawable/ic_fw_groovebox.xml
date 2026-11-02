@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="160dp"
+    android:height="100dp"
+    android:viewportWidth="160"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#1E110B"
+        android:pathData="M0,0h160v100H0z" />
+    <!-- 16-Step Sequencer Grid Pads -->
+    <path
+        android:fillColor="#FF6B2B"
+        android:pathData="M20,24h24v18H20zM52,24h24v18H52zM116,24h24v18H116zM20,54h24v18H20zM84,54h24v18H84z" />
+    <path
+        android:fillColor="#3B2820"
+        android:pathData="M84,24h24v18H84zM52,54h24v18H52zM116,54h24v18H116z" />
+    <!-- Playhead bar -->
+    <path
+        android:fillColor="#00E5A3"
+        android:pathData="M18,16h4v64h-4z" />
+</vector>

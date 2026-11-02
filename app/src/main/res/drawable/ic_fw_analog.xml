@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="160dp"
+    android:height="100dp"
+    android:viewportWidth="160"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#1A121B"
+        android:pathData="M0,0h160v100H0z" />
+    <!-- Analog Sawtooth & Resonant Filter Curve -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M18,68 L48,28 L48,68 L78,28 L78,68 L108,28 L108,68 L138,28"
+        android:strokeWidth="3.5"
+        android:strokeColor="#FF6B2B" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M18,74 C56,74 74,20 92,24 C106,28 116,76 142,78"
+        android:strokeWidth="3"
+        android:strokeColor="#38BDF8" />
+</vector>

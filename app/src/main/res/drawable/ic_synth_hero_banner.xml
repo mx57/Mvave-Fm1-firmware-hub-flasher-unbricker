@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="360dp"
+    android:height="140dp"
+    android:viewportWidth="360"
+    android:viewportHeight="140">
+    <!-- Chassis Background -->
+    <path
+        android:fillColor="#11151C"
+        android:pathData="M12,12h336c4.4,0 8,3.6 8,8v100c0,4.4 -3.6,8 -8,8H12c-4.4,0 -8,-3.6 -8,-8V20C4,15.6 7.6,12 12,12z"
+        android:strokeWidth="1.5"
+        android:strokeColor="#2A3342" />
+    <!-- OLED Screen Frame -->
+    <path
+        android:fillColor="#080A0E"
+        android:pathData="M26,26h150v58H26z"
+        android:strokeWidth="1.2"
+        android:strokeColor="#00E5A3" />
+    <!-- FM Algorithm Graph inside OLED -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,64 C46,32 54,32 66,64 C78,92 86,30 98,55 C110,80 122,34 134,58 C146,82 156,42 168,54"
+        android:strokeWidth="2.2"
+        android:strokeColor="#00E5A3" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M34,74 L168,74"
+        android:strokeWidth="0.8"
+        android:strokeColor="#38BDF8" />
+    <!-- Rotary Encoders on Synth -->
+    <path
+        android:fillColor="#1E2530"
+        android:pathData="M212,48m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0"
+        android:strokeWidth="2"
+        android:strokeColor="#FF6B2B" />
+    <path
+        android:fillColor="#FF6B2B"
+        android:pathData="M210,34h4v12h-4z" />
+    <path
+        android:fillColor="#1E2530"
+        android:pathData="M262,48m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0"
+        android:strokeWidth="2"
+        android:strokeColor="#00E5A3" />
+    <path
+        android:fillColor="#00E5A3"
+        android:pathData="M260,34h4v12h-4z" />
+    <path
+        android:fillColor="#1E2530"
+        android:pathData="M312,48m-16,0a16,16 0,1 1,32 0a16,16 0,1 1,-32 0"
+        android:strokeWidth="2"
+        android:strokeColor="#38BDF8" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M310,34h4v12h-4z" />
+    <!-- Mini Synth Keys / Sequencer Step Pads -->
+    <path
+        android:fillColor="#1F2733"
+        android:pathData="M26,94h24v20H26zM56,94h24v20H56zM86,94h24v20H86zM116,94h24v20H116zM146,94h24v20H146zM176,94h24v20H176zM206,94h24v20H206zM236,94h24v20H236z" />
+    <!-- Active Step Pad Indicators -->
+    <path
+        android:fillColor="#FF6B2B"
+        android:pathData="M30,98h16v4H30zM120,98h16v4H120zM210,98h16v4H210z" />
+    <path
+        android:fillColor="#00E5A3"
+        android:pathData="M274,94h60v20H274z" />
+    <path
+        android:fillColor="#0D0F12"
+        android:pathData="M282,101h44v6H282z" />
+</vector>

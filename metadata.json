@@ -1,0 +1,6 @@
+{
+  "name": "FM1 FirmwareHub",
+  "description": "TheFirmwareHub flasher, checksum verifier, EEPROM backup manager, and JieLi WL82 Unbricker for the M-VAVE FM-1 synthesizer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

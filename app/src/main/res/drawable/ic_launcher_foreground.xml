@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Microchip pins top/bottom/left/right -->
+    <path
+        android:fillColor="#00E5A3"
+        android:pathData="M40,22h4v8h-4zM52,22h4v8h-4zM64,22h4v8h-4zM40,78h4v8h-4zM52,78h4v8h-4zM64,78h4v8h-4zM22,40h8v4h-8zM22,52h8v4h-8zM22,64h8v4h-8zM78,40h8v4h-8zM78,52h8v4h-8zM78,64h8v4h-8z" />
+    <!-- Outer IC Housing -->
+    <path
+        android:fillColor="#FF6B2B"
+        android:pathData="M34,30h40c2.2,0 4,1.8 4,4v40c0,2.2 -1.8,4 -4,4H34c-2.2,0 -4,-1.8 -4,-4V34C30,31.8 31.8,30 34,30z" />
+    <!-- Inner OLED Core -->
+    <path
+        android:fillColor="#0D0F12"
+        android:pathData="M38,34h32v40H38z" />
+    <!-- FM Synth Waveform & Flash Bolt -->
+    <path
+        android:fillColor="#00E5A3"
+        android:pathData="M40,56h5l4,-12l6,20l6,-16l4,8h5v4h-7l-2,-4l-6,16l-6,-20l-2,6h-7z" />
+</vector>

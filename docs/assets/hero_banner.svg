@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="100%" height="420">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0D0F12" />
+      <stop offset="55%" stop-color="#151921" />
+      <stop offset="100%" stop-color="#1D232E" />
+    </linearGradient>
+    <linearGradient id="orangeGlow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF6B2B" />
+      <stop offset="100%" stop-color="#FF945E" />
+    </linearGradient>
+    <linearGradient id="cyanGlow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00E5A3" />
+      <stop offset="100%" stop-color="#38BDF8" />
+    </linearGradient>
+  </defs>
+
+  <!-- Main Background -->
+  <rect width="1200" height="420" rx="20" fill="url(#bgGrad)" stroke="#2B3444" stroke-width="2" />
+
+  <!-- Subtle Technical Grid -->
+  <g stroke="#222A38" stroke-width="1" opacity="0.6">
+    <line x1="0" y1="70" x2="1200" y2="70" />
+    <line x1="0" y1="140" x2="1200" y2="140" />
+    <line x1="0" y1="210" x2="1200" y2="210" />
+    <line x1="0" y1="280" x2="1200" y2="280" />
+    <line x1="0" y1="350" x2="1200" y2="350" />
+    <line x1="640" y1="0" x2="640" y2="420" />
+    <line x1="920" y1="0" x2="920" y2="420" />
+  </g>
+
+  <!-- Left Title & Badges Column -->
+  <g transform="translate(48, 52)">
+    <rect x="0" y="0" width="410" height="30" rx="6" fill="#3B1D11" stroke="#FF6B2B" stroke-width="1.2" />
+    <text x="14" y="20" fill="#FF6B2B" font-family="monospace" font-size="13" font-weight="bold">
+      THEFIRMWAREHUB.COM • JIELI AC791N / WL82 STUDIO
+    </text>
+
+    <text x="0" y="84" fill="#F1F5F9" font-family="sans-serif" font-size="44" font-weight="800">
+      FM1 FirmwareHub
+    </text>
+    <text x="0" y="128" fill="url(#cyanGlow)" font-family="sans-serif" font-size="28" font-weight="700">
+      &amp; M-VAVE FM-1 Unbricker
+    </text>
+
+    <text x="0" y="172" fill="#94A3B8" font-family="sans-serif" font-size="16">
+      Cross-Platform USB OTG Firmware Flasher, Checksum Verifier,
+    </text>
+    <text x="0" y="196" fill="#94A3B8" font-family="sans-serif" font-size="16">
+      EEPROM Preset Backup Manager &amp; WL82 Bootloader Recovery Tool
+    </text>
+
+    <!-- Feature Pills -->
+    <g transform="translate(0, 226)">
+      <rect x="0" y="0" width="165" height="34" rx="8" fill="#073528" stroke="#00E5A3" stroke-width="1.2" />
+      <text x="14" y="22" fill="#00E5A3" font-family="monospace" font-size="13" font-weight="bold">
+        0x4000 SAFE GUARD
+      </text>
+
+      <rect x="180" y="0" width="185" height="34" rx="8" fill="#0C2D42" stroke="#38BDF8" stroke-width="1.2" />
+      <text x="194" y="22" fill="#38BDF8" font-family="monospace" font-size="13" font-weight="bold">
+        SHA-256 / CRC32 / MD5
+      </text>
+
+      <rect x="380" y="0" width="175" height="34" rx="8" fill="#1F252E" stroke="#F59E0B" stroke-width="1.2" />
+      <text x="394" y="22" fill="#F59E0B" font-family="monospace" font-size="13" font-weight="bold">
+        WL82 UBOOT1.00
+      </text>
+    </g>
+
+    <text x="0" y="298" fill="#64748B" font-family="monospace" font-size="13">
+      VID_4C4A : PID_8057  |  MIDI SysEx F0 22 24 35 7D F7  |  RP2040 Bridge
+    </text>
+  </g>
+
+  <!-- Right M-VAVE FM-1 Hardware Synth Illustration -->
+  <g transform="translate(650, 56)">
+    <!-- Synth Outer Chassis -->
+    <rect x="0" y="0" width="500" height="308" rx="16" fill="#10141B" stroke="#364154" stroke-width="2.5" />
+    <rect x="14" y="14" width="472" height="280" rx="10" fill="#151A24" stroke="#242C3A" stroke-width="1.5" />
+
+    <!-- OLED Display Module -->
+    <rect x="30" y="30" width="240" height="125" rx="8" fill="#07090D" stroke="#00E5A3" stroke-width="1.8" />
+    <text x="44" y="52" fill="#38BDF8" font-family="monospace" font-size="11" font-weight="bold">
+      SLOOP v2.4 • 6-OP FM • OFFSET 0x4000
+    </text>
+    <!-- FM Sine/Modulated Waveform -->
+    <path d="M 44 102 C 68 48, 86 48, 106 102 C 126 146, 146 42, 168 92 C 190 142, 210 52, 232 96 C 244 118, 250 76, 258 92"
+          fill="none" stroke="#00E5A3" stroke-width="3" />
+    <line x1="44" y1="126" x2="256" y2="126" stroke="#1E293B" stroke-width="1.5" />
+    <text x="44" y="143" fill="#00E5A3" font-family="monospace" font-size="11">
+      CRC32: VERIFIED OK  •  64 SECTORS
+    </text>
+
+    <!-- 3 Parameter Encoders -->
+    <g transform="translate(315, 68)">
+      <circle cx="0" cy="0" r="26" fill="#1D2432" stroke="#FF6B2B" stroke-width="3" />
+      <line x1="0" y1="-22" x2="0" y2="-6" stroke="#FF6B2B" stroke-width="4" />
+      <text x="-16" y="42" fill="#94A3B8" font-family="monospace" font-size="10">ALGO</text>
+    </g>
+    <g transform="translate(385, 68)">
+      <circle cx="0" cy="0" r="26" fill="#1D2432" stroke="#00E5A3" stroke-width="3" />
+      <line x1="0" y1="-22" x2="10" y2="-8" stroke="#00E5A3" stroke-width="4" />
+      <text x="-16" y="42" fill="#94A3B8" font-family="monospace" font-size="10">MOD</text>
+    </g>
+    <g transform="translate(450, 68)">
+      <circle cx="0" cy="0" r="26" fill="#1D2432" stroke="#38BDF8" stroke-width="3" />
+      <line x1="0" y1="-22" x2="-10" y2="-8" stroke="#38BDF8" stroke-width="4" />
+      <text x="-18" y="42" fill="#94A3B8" font-family="monospace" font-size="10">DECAY</text>
+    </g>
+
+    <!-- 16 Sequencer / Keyboard Tactile Step Pads -->
+    <g transform="translate(30, 185)">
+      <rect x="0" y="0" width="48" height="82" rx="6" fill="#1F2735" stroke="#FF6B2B" stroke-width="1.5" />
+      <rect x="10" y="10" width="28" height="8" rx="3" fill="#FF6B2B" />
+
+      <rect x="56" y="0" width="48" height="82" rx="6" fill="#1F2735" stroke="#2E3A4E" stroke-width="1.2" />
+      <rect x="66" y="10" width="28" height="8" rx="3" fill="#334155" />
+
+      <rect x="112" y="0" width="48" height="82" rx="6" fill="#1F2735" stroke="#00E5A3" stroke-width="1.5" />
+      <rect x="122" y="10" width="28" height="8" rx="3" fill="#00E5A3" />
+
+      <rect x="168" y="0" width="48" height="82" rx="6" fill="#1F2735" stroke="#2E3A4E" stroke-width="1.2" />
+      <rect x="178" y="10" width="28" height="8" rx="3" fill="#334155" />
+
+      <rect x="224" y="0" width="48" height="82" rx="6" fill="#1F2735" stroke="#FF6B2B" stroke-width="1.5" />
+      <rect x="234" y="10" width="28" height="8" rx="3" fill="#FF6B2B" />
+
+      <rect x="280" y="0" width="48" height="82" rx="6" fill="#1F2735" stroke="#2E3A4E" stroke-width="1.2" />
+      <rect x="290" y="10" width="28" height="8" rx="3" fill="#334155" />
+
+      <rect x="336" y="0" width="104" height="82" rx="8" fill="#073528" stroke="#00E5A3" stroke-width="2" />
+      <text x="352" y="38" fill="#00E5A3" font-family="monospace" font-size="13" font-weight="bold">USB OTG</text>
+      <text x="352" y="58" fill="#A6FCE0" font-family="monospace" font-size="11">READY • OK</text>
+    </g>
+  </g>
+</svg>

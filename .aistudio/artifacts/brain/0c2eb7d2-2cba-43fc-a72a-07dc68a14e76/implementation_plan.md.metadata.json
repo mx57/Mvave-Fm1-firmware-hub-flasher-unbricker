@@ -1,0 +1,6 @@
+{
+  "summary": "Полный архитектурный и продуктовый план разработки приложения FirmwareHub Studio & M-VAVE FM-1 Unbricker с каталогом прошивок TheFirmwareHub, USB OTG прошивальщиком (MIDI SysEx / CDC / JieLi WL82 UBoot), проверкой контрольных сумм (SHA-256, CRC32, MD5), резервным копированием EEPROM/пресетов, пошаговым мастером восстановления и встроенной кроссплатформенной документацией.",
+  "updatedAt": "2026-11-02T18:24:42.168567975Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

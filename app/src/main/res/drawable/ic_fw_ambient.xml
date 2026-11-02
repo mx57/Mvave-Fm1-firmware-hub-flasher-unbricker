@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="160dp"
+    android:height="100dp"
+    android:viewportWidth="160"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#0A1B1E"
+        android:pathData="M0,0h160v100H0z" />
+    <!-- Generative Granular Rings & Shimmer Waves -->
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M80,50m-32,0a32,32 0,1 1,64 0a32,32 0,1 1,-64 0"
+        android:strokeWidth="2.5"
+        android:strokeColor="#00E5A3" />
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M80,50m-18,0a18,18 0,1 1,36 0a18,18 0,1 1,-36 0"
+        android:strokeWidth="2"
+        android:strokeColor="#38BDF8" />
+    <path
+        android:fillColor="#FF6B2B"
+        android:pathData="M80,50m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+</vector>

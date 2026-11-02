@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 400" width="100%" height="400">
+  <rect width="1100" height="400" rx="16" fill="#0D0F12" stroke="#2B3444" stroke-width="2" />
+
+  <!-- Panel 1: Catalog Hub -->
+  <g transform="translate(24, 24)">
+    <rect x="0" y="0" width="332" height="352" rx="14" fill="#151921" stroke="#2B3444" stroke-width="1.5" />
+    <rect x="16" y="16" width="300" height="32" rx="6" fill="#1D232E" />
+    <text x="28" y="37" fill="#FF6B2B" font-family="monospace" font-size="13" font-weight="bold">
+      1. THEFIRMWAREHUB CATALOG
+    </text>
+
+    <!-- Search Box -->
+    <rect x="16" y="60" width="300" height="34" rx="8" fill="#0D0F12" stroke="#364154" />
+    <text x="28" y="82" fill="#94A3B8" font-family="sans-serif" font-size="12">
+      🔍 Search SLOOP, Felucca, SID, Stock V16...
+    </text>
+
+    <!-- Card 1 -->
+    <rect x="16" y="106" width="300" height="106" rx="10" fill="#1A202C" stroke="#00E5A3" stroke-width="1.5" />
+    <text x="28" y="128" fill="#00E5A3" font-family="monospace" font-size="10" font-weight="bold">
+      OFFICIAL STOCK / UNBRICK • v1.16
+    </text>
+    <text x="28" y="150" fill="#F1F5F9" font-family="sans-serif" font-size="15" font-weight="bold">
+      M-VAVE FM-1 Stock Recovery
+    </text>
+    <text x="28" y="172" fill="#94A3B8" font-family="monospace" font-size="11">
+      CRC32: Verified • Offset: 0x00004000
+    </text>
+    <rect x="28" y="182" width="140" height="22" rx="5" fill="#00E5A3" />
+    <text x="42" y="197" fill="#051B14" font-family="sans-serif" font-size="11" font-weight="bold">
+      Unbrick / Flash
+    </text>
+
+    <!-- Card 2 -->
+    <rect x="16" y="224" width="300" height="106" rx="10" fill="#1A202C" stroke="#FF6B2B" stroke-width="1.2" />
+    <text x="28" y="246" fill="#FF6B2B" font-family="monospace" font-size="10" font-weight="bold">
+      GROOVEBOX &amp; SEQUENCER • v2.4.1
+    </text>
+    <text x="28" y="268" fill="#F1F5F9" font-family="sans-serif" font-size="15" font-weight="bold">
+      SLOOP Groovebox Workstation
+    </text>
+    <text x="28" y="290" fill="#94A3B8" font-family="monospace" font-size="11">
+      4-Track Step Seq • P-Locks • MIDI Sync
+    </text>
+    <rect x="28" y="300" width="140" height="22" rx="5" fill="#FF6B2B" />
+    <text x="40" y="315" fill="#140702" font-family="sans-serif" font-size="11" font-weight="bold">
+      Select &amp; Flash
+    </text>
+  </g>
+
+  <!-- Panel 2: 64-Sector USB Flasher -->
+  <g transform="translate(384, 24)">
+    <rect x="0" y="0" width="332" height="352" rx="14" fill="#151921" stroke="#2B3444" stroke-width="1.5" />
+    <rect x="16" y="16" width="300" height="32" rx="6" fill="#1D232E" />
+    <text x="28" y="37" fill="#00E5A3" font-family="monospace" font-size="13" font-weight="bold">
+      2. 64-SECTOR FLASH STUDIO
+    </text>
+
+    <!-- Boot Guard Box -->
+    <rect x="16" y="60" width="300" height="52" rx="8" fill="#073528" stroke="#00E5A3" />
+    <text x="28" y="82" fill="#00E5A3" font-family="monospace" font-size="11" font-weight="bold">
+      🔒 BOOT GUARD: 0x0000–0x3FFF LOCKED
+    </text>
+    <text x="28" y="100" fill="#A6FCE0" font-family="sans-serif" font-size="11">
+      Writing strictly to 0x00004000 (512 KB/s)
+    </text>
+
+    <!-- 64 Sector Visual Grid -->
+    <rect x="16" y="124" width="300" height="92" rx="8" fill="#0D0F12" stroke="#2B3444" />
+    <text x="26" y="144" fill="#38BDF8" font-family="monospace" font-size="11">
+      ■■■ Boot (1-4)   ■■■■■■■■■■■■ App (5-64)
+    </text>
+    <g transform="translate(26, 156)">
+      <rect x="0" y="0" width="28" height="18" rx="3" fill="#38BDF8" />
+      <rect x="34" y="0" width="28" height="18" rx="3" fill="#38BDF8" />
+      <rect x="68" y="0" width="28" height="18" rx="3" fill="#38BDF8" />
+      <rect x="102" y="0" width="28" height="18" rx="3" fill="#38BDF8" />
+      <rect x="136" y="0" width="28" height="18" rx="3" fill="#00E5A3" />
+      <rect x="170" y="0" width="28" height="18" rx="3" fill="#00E5A3" />
+      <rect x="204" y="0" width="28" height="18" rx="3" fill="#00E5A3" />
+      <rect x="238" y="0" width="28" height="18" rx="3" fill="#00E5A3" />
+
+      <rect x="0" y="24" width="28" height="18" rx="3" fill="#00E5A3" />
+      <rect x="34" y="24" width="28" height="18" rx="3" fill="#00E5A3" />
+      <rect x="68" y="24" width="28" height="18" rx="3" fill="#00E5A3" />
+      <rect x="102" y="24" width="28" height="18" rx="3" fill="#FF6B2B" />
+      <rect x="136" y="24" width="28" height="18" rx="3" fill="#263040" />
+      <rect x="170" y="24" width="28" height="18" rx="3" fill="#263040" />
+      <rect x="204" y="24" width="28" height="18" rx="3" fill="#263040" />
+      <rect x="238" y="24" width="28" height="18" rx="3" fill="#263040" />
+    </g>
+
+    <!-- Checksum Box -->
+    <rect x="16" y="228" width="300" height="58" rx="8" fill="#0D0F12" stroke="#00E5A3" />
+    <text x="26" y="248" fill="#00E5A3" font-family="monospace" font-size="11" font-weight="bold">
+      ✓ INTEGRITY VERIFIED (SHA-256 &amp; CRC32)
+    </text>
+    <text x="26" y="268" fill="#94A3B8" font-family="monospace" font-size="10">
+      Auto-Backup EEPROM + Read-Back Verify ON
+    </text>
+
+    <!-- Primary CTA -->
+    <rect x="16" y="298" width="300" height="40" rx="8" fill="#FF6B2B" />
+    <text x="48" y="323" fill="#140702" font-family="sans-serif" font-size="13" font-weight="bold">
+      ⚡ START AUTO-FLASH (0x00004000)
+    </text>
+  </g>
+
+  <!-- Panel 3: Unbricker & Logs -->
+  <g transform="translate(744, 24)">
+    <rect x="0" y="0" width="332" height="352" rx="14" fill="#151921" stroke="#2B3444" stroke-width="1.5" />
+    <rect x="16" y="16" width="300" height="32" rx="6" fill="#1D232E" />
+    <text x="28" y="37" fill="#38BDF8" font-family="monospace" font-size="13" font-weight="bold">
+      3. UNBRICKER &amp; TELEMETRY
+    </text>
+
+    <!-- Soft-Brick Card -->
+    <rect x="16" y="60" width="300" height="92" rx="8" fill="#1A202C" stroke="#F59E0B" />
+    <text x="26" y="80" fill="#F59E0B" font-family="monospace" font-size="11" font-weight="bold">
+      SOFT-BRICK: WL82 UBOOT1.00 (4C4A:8057)
+    </text>
+    <text x="26" y="100" fill="#F1F5F9" font-family="sans-serif" font-size="12">
+      Black screen recovery without extra wiring
+    </text>
+    <rect x="26" y="114" width="280" height="28" rx="6" fill="#00E5A3" />
+    <text x="48" y="132" fill="#041E15" font-family="sans-serif" font-size="11" font-weight="bold">
+      1-CLICK STOCK V16 RECOVERY (0x4000)
+    </text>
+
+    <!-- Hard-Brick Pinout -->
+    <rect x="16" y="164" width="300" height="82" rx="8" fill="#0D0F12" stroke="#38BDF8" />
+    <text x="26" y="184" fill="#38BDF8" font-family="monospace" font-size="11" font-weight="bold">
+      HARD-BRICK: RP2040 TRANSPORTER WIZARD
+    </text>
+    <text x="26" y="204" fill="#00E5A3" font-family="monospace" font-size="11">
+      GPIO 0 (RP2040) ──► USB D+ (FM-1)
+    </text>
+    <text x="26" y="220" fill="#00E5A3" font-family="monospace" font-size="11">
+      GPIO 1 (RP2040) ──► USB D- (FM-1)
+    </text>
+    <text x="26" y="236" fill="#94A3B8" font-family="monospace" font-size="10">
+      + Desktop Scripts (Win PowerShell / Linux / macOS)
+    </text>
+
+    <!-- Live Terminal -->
+    <rect x="16" y="258" width="300" height="80" rx="8" fill="#07090D" stroke="#2B3444" />
+    <text x="24" y="276" fill="#38BDF8" font-family="monospace" font-size="10">
+      [USB_IO] TX SysEx: F0 22 24 35 7D F7
+    </text>
+    <text x="24" y="294" fill="#00E5A3" font-family="monospace" font-size="10">
+      [UBOOT] WL82 UBOOT1.00 Handshake ACK
+    </text>
+    <text x="24" y="312" fill="#FF6B2B" font-family="monospace" font-size="10">
+      [HASH] SHA-256 &amp; CRC32 Read-Back OK
+    </text>
+    <text x="24" y="328" fill="#94A3B8" font-family="monospace" font-size="10">
+      [DONE] Rebooting DSP @ 0x00004000...
+    </text>
+  </g>
+</svg>

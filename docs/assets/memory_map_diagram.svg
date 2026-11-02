@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 360" width="100%" height="360">
+  <rect width="1100" height="360" rx="16" fill="#0D0F12" stroke="#2B3444" stroke-width="2" />
+
+  <text x="36" y="42" fill="#F1F5F9" font-family="sans-serif" font-size="22" font-weight="bold">
+    JieLi AC791N / WL82 Flash Memory Layout &amp; Safe Unbrick Architecture
+  </text>
+  <text x="36" y="66" fill="#94A3B8" font-family="monospace" font-size="13">
+    Hardware Bootloader Protection (0x0000–0x3FFF) + Application Region (0x00004000+) + EEPROM Presets
+  </text>
+
+  <!-- Memory Map Bar -->
+  <g transform="translate(36, 94)">
+    <!-- 0x0000 - 0x3FFF Boot Header -->
+    <rect x="0" y="0" width="250" height="110" rx="10" fill="#0C2D42" stroke="#38BDF8" stroke-width="2.5" />
+    <text x="18" y="30" fill="#38BDF8" font-family="monospace" font-size="15" font-weight="bold">
+      0x00000000 – 0x00003FFF
+    </text>
+    <text x="18" y="56" fill="#F1F5F9" font-family="sans-serif" font-size="15" font-weight="bold">
+      WL82 Boot Header (16 KB)
+    </text>
+    <text x="18" y="80" fill="#B9E6FE" font-family="monospace" font-size="12">
+      [LOCKED / READ-ONLY GUARD]
+    </text>
+    <text x="18" y="98" fill="#94A3B8" font-family="monospace" font-size="11">
+      Blocks raw .fwsc at 0x0000
+    </text>
+
+    <!-- 0x4000 - 0xEFFFF Firmware Partition -->
+    <rect x="266" y="0" width="500" height="110" rx="10" fill="#073528" stroke="#00E5A3" stroke-width="2.5" />
+    <text x="286" y="30" fill="#00E5A3" font-family="monospace" font-size="15" font-weight="bold">
+      0x00004000 – 0x000EFFFF (SAFE WRITE TARGET)
+    </text>
+    <text x="286" y="56" fill="#F1F5F9" font-family="sans-serif" font-size="15" font-weight="bold">
+      Active Synth Firmware (SLOOP / Felucca / Stock V16)
+    </text>
+    <text x="286" y="80" fill="#A6FCE0" font-family="monospace" font-size="12">
+      Verified via SHA-256 + CRC32 + MD5 before &amp; after write
+    </text>
+    <text x="286" y="98" fill="#94A3B8" font-family="monospace" font-size="11">
+      64-Sector Chunked USB Bulk / MIDI SysEx Transfer
+    </text>
+
+    <!-- 0xF0000 - 0xFFFFF EEPROM Presets -->
+    <rect x="782" y="0" width="246" height="110" rx="10" fill="#3B1D11" stroke="#FF6B2B" stroke-width="2.5" />
+    <text x="800" y="30" fill="#FF6B2B" font-family="monospace" font-size="15" font-weight="bold">
+      0x000F0000 – 0x000FFFFF
+    </text>
+    <text x="800" y="56" fill="#F1F5F9" font-family="sans-serif" font-size="15" font-weight="bold">
+      EEPROM &amp; 64 User Presets
+    </text>
+    <text x="800" y="80" fill="#FFDBCE" font-family="monospace" font-size="12">
+      [AUTO-BACKUP SNAPSHOT]
+    </text>
+    <text x="800" y="98" fill="#94A3B8" font-family="monospace" font-size="11">
+      Restorable in 1-Click (.bin/.json)
+    </text>
+  </g>
+
+  <!-- Bottom Recovery Pathways -->
+  <g transform="translate(36, 230)">
+    <rect x="0" y="0" width="330" height="96" rx="10" fill="#151921" stroke="#2B3444" stroke-width="1.5" />
+    <text x="16" y="28" fill="#00E5A3" font-family="monospace" font-size="13" font-weight="bold">
+      MODE 1: NORMAL USB-MIDI SYSEX
+    </text>
+    <text x="16" y="52" fill="#F1F5F9" font-family="sans-serif" font-size="13">
+      Sends trigger F0 22 24 35 7D F7
+    </text>
+    <text x="16" y="74" fill="#94A3B8" font-family="monospace" font-size="12">
+      Auto-switches synth into UBoot mode
+    </text>
+
+    <rect x="348" y="0" width="330" height="96" rx="10" fill="#151921" stroke="#F59E0B" stroke-width="1.5" />
+    <text x="364" y="28" fill="#F59E0B" font-family="monospace" font-size="13" font-weight="bold">
+      MODE 2: SOFT-BRICK (WL82 UBOOT1.00)
+    </text>
+    <text x="364" y="52" fill="#F1F5F9" font-family="sans-serif" font-size="13">
+      Direct USB VID_4C4A : PID_8057
+    </text>
+    <text x="364" y="74" fill="#94A3B8" font-family="monospace" font-size="12">
+      Dumps flash &amp; writes Stock V16 @ 0x4000
+    </text>
+
+    <rect x="696" y="0" width="332" height="96" rx="10" fill="#151921" stroke="#38BDF8" stroke-width="1.5" />
+    <text x="712" y="28" fill="#38BDF8" font-family="monospace" font-size="13" font-weight="bold">
+      MODE 3: HARD-BRICK (RP2040 BRIDGE)
+    </text>
+    <text x="712" y="52" fill="#F1F5F9" font-family="sans-serif" font-size="13">
+      XIAO RP2040 / Pi Pico + wl82loader
+    </text>
+    <text x="712" y="74" fill="#94A3B8" font-family="monospace" font-size="12">
+      Forces MaskROM over USB D+ / D- lines
+    </text>
+  </g>
+</svg>

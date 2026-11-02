@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="160dp"
+    android:height="100dp"
+    android:viewportWidth="160"
+    android:viewportHeight="100">
+    <path
+        android:fillColor="#0B1926"
+        android:pathData="M0,0h160v100H0z" />
+    <!-- 6-Operator FM Algorithm Nodes -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M34,20h22v18H34zM69,20h22v18H69zM104,20h22v18H104z" />
+    <path
+        android:fillColor="#00E5A3"
+        android:pathData="M34,58h22v18H34zM69,58h22v18H69zM104,58h22v18H104z" />
+    <!-- Carrier/Modulator routing lines -->
+    <path
+        android:fillColor="#FF6B2B"
+        android:pathData="M43,38h4v20h-4zM78,38h4v20h-4zM113,38h4v20h-4z" />
+</vector>

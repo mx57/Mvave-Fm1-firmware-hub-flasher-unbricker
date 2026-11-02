@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- JieLi WL82 / AC791N UBOOT1.00 Soft-Brick Bootloader Mode (VID 0x4C4A = 19530, PID 0x8057 = 32855) -->
+    <usb-device vendor-id="19530" product-id="32855" />
+    <!-- M-VAVE FM-1 Standard USB-MIDI / CDC Mode -->
+    <usb-device vendor-id="19530" />
+    <!-- Seeed Studio XIAO RP2040 / Raspberry Pi Pico FM-1 Transporter Bridge (VID 0x2E8A = 11914) -->
+    <usb-device vendor-id="11914" />
+    <!-- Generic USB Audio / MIDI Class Devices (Class 1) and CDC Devices (Class 2) -->
+    <usb-device class="1" />
+    <usb-device class="2" />
+</resources>

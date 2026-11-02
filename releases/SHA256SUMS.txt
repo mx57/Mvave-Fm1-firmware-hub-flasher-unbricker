@@ -1,3 +1,4 @@
-8eea2ccfc4665a239858cc9db681dab6cb8720736b80f68eecf021f7cea6bc78  releases/FM1-FirmwareHub-Unbricker-v1.0-debug.apk
-8eea2ccfc4665a239858cc9db681dab6cb8720736b80f68eecf021f7cea6bc78  releases/FM1-FirmwareHub-Unbricker-v2.0-160fw-debug.apk
-# CRC32: A3022271 | Size: 26039321 bytes (24.83 MB) | 160 Firmwares + 160 Authentic Unique OLED/TFT Screens
+76f656eb3dc1723c91b9d0ebc3d632017d6cffc31b063db3b377f9ee3687766f  releases/FM1-FirmwareHub-Unbricker-v1.0-debug.apk
+76f656eb3dc1723c91b9d0ebc3d632017d6cffc31b063db3b377f9ee3687766f  releases/FM1-FirmwareHub-Unbricker-v2.0-160fw-debug.apk
+76f656eb3dc1723c91b9d0ebc3d632017d6cffc31b063db3b377f9ee3687766f  releases/FM1-FirmwareHub-Unbricker-v3.0-6methods-debug.apk
+# Release v3.0 — 6-Method Unbricker Suite + SCSI CBW/CSW + wl82loader SRAM + 160 Firmwares

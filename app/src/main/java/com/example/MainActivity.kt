@@ -466,11 +466,34 @@ fun FirmwareHubApp(
 
                             AppDestination.UNBRICKER -> UnbrickerScreen(
                                 connectedDevice = connectedDevice,
+                                selectedFirmware = selectedFirmware,
+                                useSimulationMode = useSimulationMode,
+                                simulatedProfile = simulatedProfile,
                                 suspectHardBrickCableConnected = suspectHardBrickCableConnected,
                                 flashState = flashState,
                                 onRefreshUsb = { viewModel.refreshUsbConnection(showToastOnScan = true) },
                                 onRequestUsbPermission = viewModel::requestActiveUsbPermission,
+                                onSetSimulationMode = viewModel::setSimulationMode,
+                                onSelectSimulatedProfile = viewModel::selectSimulatedProfile,
                                 onSetHardBrickSuspected = viewModel::setHardBrickCableSuspected,
+                                onSelectUnbrickMethod = viewModel::selectUnbrickMethod,
+                                onSetUnbrickUiMode = viewModel::setUnbrickUiMode,
+                                onSelectTargetOption = viewModel::selectUnbrickTargetOption,
+                                onSetMaxRetries = viewModel::setMaxSectorRetries,
+                                onSetBlockSize = viewModel::setTransferBlockSize,
+                                onToggleBootSectorRebuild = viewModel::toggleAllowBootSectorRebuild,
+                                onInjectWl82LoaderNow = viewModel::injectWl82RamLoaderNow,
+                                onToggleBootloopCatcher = viewModel::toggleBootloopAndPinShortCatcher,
+                                onRunFwscSurgeon = viewModel::runFwscContainerSurgeonNow,
+                                onRepairBootHeader0x0000 = viewModel::repairBootloaderHeader0x0000Now,
+                                onExportFull1MbDump = {
+                                    viewModel.prepareExportFull1MbSpiDump { suggestedName ->
+                                        exportBinLauncher.launch(suggestedName)
+                                    }
+                                },
+                                onImportCustomFile = {
+                                    filePickerLauncher.launch(arrayOf("*/*"))
+                                },
                                 onRunSoftBrickRecovery = viewModel::triggerSoftBrickStockRecovery,
                                 onSetWizardStep = viewModel::setUnbrickWizardStep,
                                 onOpenLogsAndScripts = {

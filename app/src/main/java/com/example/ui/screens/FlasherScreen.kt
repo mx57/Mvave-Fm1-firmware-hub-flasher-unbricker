@@ -93,7 +93,8 @@ fun FlasherScreen(
     val statusAccentColor = when (verdict) {
         DeviceDiagnosticVerdict.NORMAL_MODE_READY -> SynthPhosphor
         DeviceDiagnosticVerdict.SOFT_BRICK_DETECTED,
-        DeviceDiagnosticVerdict.HARD_BRICK_BRIDGE_READY -> SynthOrange
+        DeviceDiagnosticVerdict.HARD_BRICK_BRIDGE_READY,
+        DeviceDiagnosticVerdict.CH341A_PROGRAMMER_READY -> SynthOrange
         DeviceDiagnosticVerdict.SIMULATION_MODE -> SynthCyan
         DeviceDiagnosticVerdict.PERMISSION_PENDING -> SynthAmberWarn
         DeviceDiagnosticVerdict.NO_OTG_DEVICE,
@@ -362,7 +363,8 @@ fun FlasherScreen(
                             listOf(
                                 UsbProfileType.MVAVE_NORMAL_MIDI,
                                 UsbProfileType.WL82_UBOOT_SOFTBRICK,
-                                UsbProfileType.RP2040_TRANSPORTER_BRIDGE
+                                UsbProfileType.RP2040_TRANSPORTER_BRIDGE,
+                                UsbProfileType.CH341A_SPI_PROGRAMMER
                             ).forEach { profile ->
                                 FilterChip(
                                     selected = simulatedProfile == profile,

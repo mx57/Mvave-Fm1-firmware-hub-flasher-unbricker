@@ -199,13 +199,15 @@ fun CatalogScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Active USB Status Bar inside Hero
+                    val usbStatusColor = when {
+                        connectedDevice.isReadyToFlash && !connectedDevice.isSimulated -> SynthPhosphor
+                        connectedDevice.isSimulated -> SynthCyan
+                        else -> SynthOrange
+                    }
                     Surface(
                         color = MaterialTheme.colorScheme.background,
                         shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(
-                            1.dp,
-                            if (connectedDevice.isSimulated) SynthCyan.copy(alpha = 0.45f) else SynthPhosphor.copy(alpha = 0.6f)
-                        ),
+                        border = BorderStroke(1.dp, usbStatusColor.copy(alpha = 0.65f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -222,15 +224,15 @@ fun CatalogScreen(
                                 Icon(
                                     imageVector = Icons.Default.Memory,
                                     contentDescription = "Статус USB",
-                                    tint = if (connectedDevice.isSimulated) SynthCyan else SynthPhosphor,
+                                    tint = usbStatusColor,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = connectedDevice.productName,
+                                        text = "${connectedDevice.diagnosticVerdict.badgeTitle}: ${connectedDevice.productName}",
                                         style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = usbStatusColor
                                     )
                                     Text(
                                         text = "${connectedDevice.vidPidHex} • ${connectedDevice.bootloaderVersion}",
@@ -243,7 +245,7 @@ fun CatalogScreen(
                                 onClick = onOpenUnbricker,
                                 label = {
                                     Text(
-                                        text = "Unbricker",
+                                        text = "Диагностика / Unbrick",
                                         style = MaterialTheme.typography.labelSmall
                                     )
                                 },

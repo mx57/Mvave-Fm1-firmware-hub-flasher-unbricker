@@ -102,15 +102,18 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
     private var pendingExportBytes: ByteArray? = null
     private var pendingExportFirmwareName: String = ""
 
-    // USB & Simulation state
-    private val _useSimulationMode = MutableStateFlow(true)
+    // USB & Simulation state (Simulation OFF by default — strictly requires physical USB OTG unless explicitly enabled)
+    private val _useSimulationMode = MutableStateFlow(false)
     val useSimulationMode: StateFlow<Boolean> = _useSimulationMode.asStateFlow()
 
     private val _simulatedProfile = MutableStateFlow(UsbProfileType.MVAVE_NORMAL_MIDI)
     val simulatedProfile: StateFlow<UsbProfileType> = _simulatedProfile.asStateFlow()
 
+    private val _suspectHardBrickCableConnected = MutableStateFlow(false)
+    val suspectHardBrickCableConnected: StateFlow<Boolean> = _suspectHardBrickCableConnected.asStateFlow()
+
     private val _connectedDevice = MutableStateFlow(
-        usbEngine.buildSimulatedDevice(UsbProfileType.MVAVE_NORMAL_MIDI)
+        usbEngine.buildDisconnectedDevice(suspectHardBrick = false)
     )
     val connectedDevice: StateFlow<ConnectedUsbDeviceInfo> = _connectedDevice.asStateFlow()
 
@@ -292,43 +295,94 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
 
     fun setSimulationMode(enabled: Boolean) {
         _useSimulationMode.value = enabled
-        refreshUsbConnection()
+        if (enabled) {
+            _suspectHardBrickCableConnected.value = false
+        }
+        refreshUsbConnection(showToastOnScan = true)
     }
 
     fun selectSimulatedProfile(profile: UsbProfileType) {
         _simulatedProfile.value = profile
         _useSimulationMode.value = true
+        _suspectHardBrickCableConnected.value = false
         _connectedDevice.value = usbEngine.buildSimulatedDevice(profile)
         viewModelScope.launch {
             repository.log(
                 level = "USB_IO",
                 tag = "SIM-PROFILE",
-                message = "Выбран профиль симуляции USB: ${profile.title} (${profile.vidHex}:${profile.pidHex})",
+                message = "Выбран тестовый профиль симуляции USB: ${profile.title} (${profile.vidHex}:${profile.pidHex})",
                 hexPayload = profile.protocolBadge
             )
         }
     }
 
-    fun refreshUsbConnection() {
-        val physicalDevices = usbEngine.scanPhysicalUsbDevices()
-        if (!_useSimulationMode.value && physicalDevices.isNotEmpty()) {
-            val first = physicalDevices.first()
-            usbEngine.requestUsbPermissionIfNeeded(first.deviceName)
-            _connectedDevice.value = first
-            viewModelScope.launch {
-                repository.log(
-                    level = "USB_IO",
-                    tag = "USB-SCAN",
-                    message = "Обнаружено физическое USB OTG устройство: ${first.productName} (${first.vidPidHex})",
-                    hexPayload = first.bootloaderVersion
-                )
+    fun setHardBrickCableSuspected(cablePluggedInAndPowered: Boolean) {
+        _suspectHardBrickCableConnected.value = cablePluggedInAndPowered
+        if (cablePluggedInAndPowered) {
+            _useSimulationMode.value = false
+        }
+        refreshUsbConnection(showToastOnScan = true)
+        if (cablePluggedInAndPowered && !_connectedDevice.value.isConnected) {
+            setUnbrickWizardStep(0)
+        }
+    }
+
+    fun requestActiveUsbPermission() {
+        val current = _connectedDevice.value
+        if (current.isConnected && !current.isSimulated && !current.hasPermission) {
+            val grantedAlready = usbEngine.requestUsbPermissionIfNeeded(current.deviceName)
+            if (grantedAlready) {
+                refreshUsbConnection(showToastOnScan = true)
+            } else {
+                _statusBannerMessage.value =
+                    "Запрошено системное разрешение Android USB Host для ${current.productName} (${current.vidPidHex}). Подтвердите диалог на экране."
             }
         } else {
+            refreshUsbConnection(showToastOnScan = true)
+        }
+    }
+
+    fun refreshUsbConnection(showToastOnScan: Boolean = false) {
+        val physicalDevices = usbEngine.scanPhysicalUsbDevices()
+        if (physicalDevices.isNotEmpty() && !_useSimulationMode.value) {
+            val first = physicalDevices.first()
+            _suspectHardBrickCableConnected.value = false
+            if (!first.hasPermission) {
+                usbEngine.requestUsbPermissionIfNeeded(first.deviceName)
+            }
+            _connectedDevice.value = first
+            if (showToastOnScan) {
+                _statusBannerMessage.value = first.diagnosticDetails
+            }
+            viewModelScope.launch {
+                repository.log(
+                    level = if (first.isConnected) "USB_IO" else "WARN",
+                    tag = "USB-SCAN",
+                    message = "Статус USB OTG: ${first.diagnosticVerdict.badgeTitle} — ${first.productName} (${first.vidPidHex})",
+                    hexPayload = first.usbInterfaceSummary
+                )
+            }
+        } else if (_useSimulationMode.value) {
             val sim = usbEngine.buildSimulatedDevice(_simulatedProfile.value)
             _connectedDevice.value = sim
-            if (!_useSimulationMode.value && physicalDevices.isEmpty()) {
-                _statusBannerMessage.value =
-                    "Физические USB-устройства не найдены. Активен безопасный режим симуляции (${sim.profileType.title})."
+            if (showToastOnScan) {
+                _statusBannerMessage.value = sim.diagnosticDetails
+            }
+        } else {
+            val disconnected = usbEngine.buildDisconnectedDevice(
+                suspectHardBrick = _suspectHardBrickCableConnected.value
+            )
+            _connectedDevice.value = disconnected
+            if (showToastOnScan) {
+                _statusBannerMessage.value = disconnected.diagnosticDetails
+            }
+            viewModelScope.launch {
+                repository.log(
+                    level = if (_suspectHardBrickCableConnected.value) "ERROR" else "WARN",
+                    tag = if (_suspectHardBrickCableConnected.value) "HARD-BRICK" else "USB-DISCONNECTED",
+                    message = disconnected.diagnosticDetails,
+                    hexPayload = disconnected.usbInterfaceSummary
+                )
             }
         }
     }
@@ -582,7 +636,20 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
 
     fun createDeviceBackupNow(customNote: String = "Ручной бэкап перед модификацией памяти") {
         viewModelScope.launch {
+            refreshUsbConnection(showToastOnScan = false)
             val dev = _connectedDevice.value
+            if (!dev.isReadyToFlash) {
+                val errMsg = if (dev.isConnected && !dev.hasPermission) {
+                    usbEngine.requestUsbPermissionIfNeeded(dev.deviceName)
+                    "Не выдано разрешение USB Host! Подтвердите запрос Android для чтения дампа EEPROM."
+                } else {
+                    "ОШИБКА ЧТЕНИЯ EEPROM: Синтезатор не подключен по USB OTG! Подключите M-VAVE FM-1 кабелем OTG."
+                }
+                repository.log("ERROR", "BACKUP-FAIL", errMsg, dev.vidPidHex)
+                _statusBannerMessage.value = errMsg
+                return@launch
+            }
+
             val stamp = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(Date())
             val dumpBytes = ChecksumEngine.buildDeterministicFirmwareBinary(
                 firmwareId = "backup_${dev.vidPidHex}_$stamp",
@@ -620,6 +687,27 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
     fun restoreBackupToDevice(backup: BackupDumpEntity) {
         if (_flashSessionState.value.isFlashing) return
         viewModelScope.launch {
+            refreshUsbConnection(showToastOnScan = false)
+            val dev = _connectedDevice.value
+            if (!dev.isReadyToFlash) {
+                val errMsg = if (dev.isConnected && !dev.hasPermission) {
+                    usbEngine.requestUsbPermissionIfNeeded(dev.deviceName)
+                    "Не выдано разрешение USB Host! Подтвердите запрос Android для восстановления дампа."
+                } else {
+                    "ОШИБКА ВОССТАНОВЛЕНИЯ: Синтезатор не подключен по USB OTG! Подключите устройство кабелем OTG."
+                }
+                repository.log("ERROR", "RESTORE-FAIL", errMsg, dev.vidPidHex)
+                _flashSessionState.update {
+                    it.copy(
+                        isFlashing = false,
+                        isError = true,
+                        lastCompletedMessage = errMsg
+                    )
+                }
+                _statusBannerMessage.value = errMsg
+                return@launch
+            }
+
             _flashSessionState.update {
                 it.copy(
                     isFlashing = true,
@@ -627,39 +715,51 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     lastCompletedMessage = null
                 )
             }
-            val dev = _connectedDevice.value
-            repository.log(
-                level = "INFO",
-                tag = "BACKUP-RESTORE",
-                message = "Начато восстановление резервной копии '${backup.title}' (SHA-256: ${backup.sha256.take(12)}…) в ${dev.productName}",
-                hexPayload = backup.rawHexPreview
-            )
-            val bytes = ChecksumEngine.buildDeterministicFirmwareBinary(
-                firmwareId = backup.sha256,
-                version = backup.crc32,
-                targetOffsetHex = "0x00004000",
-                declaredSizeBytes = backup.sizeBytes
-            )
-            usbEngine.executeFlashPipeline(
-                deviceInfo = dev,
-                firmwareBytes = bytes,
-                declaredSizeBytes = backup.sizeBytes,
-                targetOffsetHex = "0x00004000",
-                expectedSha256 = ChecksumEngine.computeSha256(bytes),
-                expectedCrc32 = ChecksumEngine.computeCrc32(bytes)
-            ) { step ->
-                _flashSessionState.update { it.copy(currentProgress = step) }
-            }
-            val msg = "Настройки и пресеты из «${backup.title}» успешно восстановлены в устройство!"
-            repository.log("SUCCESS", "BACKUP-RESTORE", msg, "CRC32=${backup.crc32}")
-            _flashSessionState.update {
-                it.copy(
-                    isFlashing = false,
-                    lastCompletedMessage = msg,
-                    isError = false
+            try {
+                repository.log(
+                    level = "INFO",
+                    tag = "BACKUP-RESTORE",
+                    message = "Начато восстановление резервной копии '${backup.title}' (SHA-256: ${backup.sha256.take(12)}…) в ${dev.productName}",
+                    hexPayload = backup.rawHexPreview
                 )
+                val bytes = ChecksumEngine.buildDeterministicFirmwareBinary(
+                    firmwareId = backup.sha256,
+                    version = backup.crc32,
+                    targetOffsetHex = "0x00004000",
+                    declaredSizeBytes = backup.sizeBytes
+                )
+                usbEngine.executeFlashPipeline(
+                    deviceInfo = dev,
+                    firmwareBytes = bytes,
+                    declaredSizeBytes = backup.sizeBytes,
+                    targetOffsetHex = "0x00004000",
+                    expectedSha256 = ChecksumEngine.computeSha256(bytes),
+                    expectedCrc32 = ChecksumEngine.computeCrc32(bytes)
+                ) { step ->
+                    _flashSessionState.update { it.copy(currentProgress = step) }
+                }
+                val msg = "Настройки и пресеты из «${backup.title}» успешно восстановлены в устройство!"
+                repository.log("SUCCESS", "BACKUP-RESTORE", msg, "CRC32=${backup.crc32}")
+                _flashSessionState.update {
+                    it.copy(
+                        isFlashing = false,
+                        lastCompletedMessage = msg,
+                        isError = false
+                    )
+                }
+                _statusBannerMessage.value = msg
+            } catch (e: Exception) {
+                val errText = e.localizedMessage ?: "Ошибка USB OTG при восстановлении бэкапа"
+                repository.log("ERROR", "RESTORE-ERR", errText)
+                _flashSessionState.update {
+                    it.copy(
+                        isFlashing = false,
+                        lastCompletedMessage = errText,
+                        isError = true
+                    )
+                }
+                _statusBannerMessage.value = errText
             }
-            _statusBannerMessage.value = msg
         }
     }
 
@@ -675,6 +775,39 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
         val fw = _selectedFirmware.value ?: filteredFirmwares.value.firstOrNull() ?: return
 
         viewModelScope.launch {
+            // Re-scan physical USB OTG bus right before starting flash
+            refreshUsbConnection(showToastOnScan = false)
+            val dev = _connectedDevice.value
+
+            if (!dev.isReadyToFlash) {
+                val errText = when {
+                    dev.isConnected && !dev.hasPermission -> {
+                        usbEngine.requestUsbPermissionIfNeeded(dev.deviceName)
+                        "ОШИБКА ДОСТУПА USB: Обнаружено устройство ${dev.productName} (${dev.vidPidHex}), но не выдано системное разрешение Android USB Host. Подтвердите диалог на экране и нажмите кнопку снова."
+                    }
+                    dev.profileType == UsbProfileType.UNRECOGNIZED_USB_DEVICE -> {
+                        "ОШИБКА УСТРОЙСТВА: Подключено стороннее USB-устройство (${dev.productName}, ${dev.vidPidHex}), не являющееся M-VAVE FM-1 / WL82 UBOOT1.00. Запись заблокирована."
+                    }
+                    _suspectHardBrickCableConnected.value -> {
+                        "ОБНАРУЖЕН HARD-BRICK: Кабель подключен, но чип JieLi AC791N не отвечает по USB (поврежден загрузчик 0x0000–0x3FFF). Прямая прошивка по USB невозможна — используйте мост RP2040 / Pi Pico Transporter."
+                    }
+                    else -> {
+                        "ОШИБКА ПОДКЛЮЧЕНИЯ: Синтезатор M-VAVE FM-1 не подключен по USB OTG! Подключите устройство через OTG-кабель и нажмите «Скан USB»."
+                    }
+                }
+                repository.log("ERROR", "USB-NOT-READY", errText, dev.vidPidHex)
+                _flashSessionState.update {
+                    it.copy(
+                        isFlashing = false,
+                        currentProgress = null,
+                        lastCompletedMessage = errText,
+                        isError = true
+                    )
+                }
+                _statusBannerMessage.value = errText
+                return@launch
+            }
+
             _flashSessionState.update {
                 it.copy(
                     isFlashing = true,
@@ -684,7 +817,6 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             }
 
             try {
-                val dev = _connectedDevice.value
                 val (downloadedFw, binary) = repository.loadOrDownloadFirmwareBytes(fw)
                 _selectedFirmware.value = downloadedFw
                 val report = ChecksumEngine.analyzeBinary(binary, "${downloadedFw.id}.bin", "0x00004000")
@@ -725,7 +857,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 }
 
                 // Step 2: If in normal MIDI mode, send SysEx F0 22 24 35 7D F7 to enter WL82 UBOOT1.00
-                if (!dev.profileType.isBootloaderMode || isUnbrickRecovery) {
+                if (!dev.profileType.isBootloaderMode) {
                     usbEngine.sendSysExBootloaderTrigger(dev) { level, tag, msg, hex ->
                         repository.log(level, tag, msg, hex)
                     }
@@ -751,10 +883,11 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 }
 
+                val simPrefix = if (dev.isSimulated) "[ТЕСТОВАЯ СИМУЛЯЦИЯ] " else ""
                 val doneText = if (isUnbrickRecovery) {
-                    "UNBRICK УСПЕШЕН: Загрузчик WL82 синхронизирован, ${downloadedFw.name} (${downloadedFw.version}) записана по адресу 0x00004000 и проверена (CRC32: ${report.crc32})!"
+                    "${simPrefix}UNBRICK УСПЕШЕН: Загрузчик WL82 синхронизирован, ${downloadedFw.name} (${downloadedFw.version}) записана по адресу 0x00004000 и проверена (CRC32: ${report.crc32})!"
                 } else {
-                    "Прошивка ${downloadedFw.name} (${downloadedFw.version}) успешно записана по адресу 0x00004000 и верифицирована (SHA-256 / CRC32: ${report.crc32})!"
+                    "${simPrefix}Прошивка ${downloadedFw.name} (${downloadedFw.version}) успешно записана по адресу 0x00004000 и верифицирована (SHA-256 / CRC32: ${report.crc32})!"
                 }
 
                 repository.log(
@@ -778,6 +911,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 _flashSessionState.update {
                     it.copy(
                         isFlashing = false,
+                        currentProgress = null,
                         lastCompletedMessage = errText,
                         isError = true
                     )

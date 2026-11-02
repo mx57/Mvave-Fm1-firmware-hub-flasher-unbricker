@@ -5,7 +5,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,12 +21,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileOpen
+import androidx.compose.material.icons.filled.Healing
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Usb
+import androidx.compose.material.icons.filled.UsbOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -35,6 +37,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -49,12 +52,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.FirmwareEntity
 import com.example.domain.ChecksumReport
 import com.example.domain.ConnectedUsbDeviceInfo
+import com.example.domain.DeviceDiagnosticVerdict
 import com.example.domain.UsbProfileType
 import com.example.ui.FlashSessionUiState
 import com.example.ui.theme.JetBrainsMonoFontFamily
@@ -70,16 +75,32 @@ fun FlasherScreen(
     connectedDevice: ConnectedUsbDeviceInfo,
     useSimulationMode: Boolean,
     simulatedProfile: UsbProfileType,
+    suspectHardBrickCableConnected: Boolean,
     flashState: FlashSessionUiState,
     onSetSimulationMode: (Boolean) -> Unit,
     onSelectSimulatedProfile: (UsbProfileType) -> Unit,
+    onSetHardBrickSuspected: (Boolean) -> Unit,
+    onRequestUsbPermission: () -> Unit,
     onRefreshUsb: () -> Unit,
+    onOpenUnbricker: () -> Unit,
     onToggleAutoBackup: (Boolean) -> Unit,
     onToggleVerifyAfterFlash: (Boolean) -> Unit,
     onBackupNow: () -> Unit,
     onImportLocalFile: () -> Unit,
     onStartFlash: () -> Unit
 ) {
+    val verdict = connectedDevice.diagnosticVerdict
+    val statusAccentColor = when (verdict) {
+        DeviceDiagnosticVerdict.NORMAL_MODE_READY -> SynthPhosphor
+        DeviceDiagnosticVerdict.SOFT_BRICK_DETECTED,
+        DeviceDiagnosticVerdict.HARD_BRICK_BRIDGE_READY -> SynthOrange
+        DeviceDiagnosticVerdict.SIMULATION_MODE -> SynthCyan
+        DeviceDiagnosticVerdict.PERMISSION_PENDING -> SynthAmberWarn
+        DeviceDiagnosticVerdict.NO_OTG_DEVICE,
+        DeviceDiagnosticVerdict.HARD_BRICK_SUSPECTED,
+        DeviceDiagnosticVerdict.UNSUPPORTED_USB_DEVICE -> Color(0xFFFF5252)
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -87,44 +108,54 @@ fun FlasherScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. USB Bus & Hardware Simulation Control Card
+        // 1. Real USB OTG Detector & Brick Diagnostic Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(
-                    1.dp,
-                    if (useSimulationMode) SynthAmberWarn.copy(alpha = 0.65f) else SynthPhosphor.copy(alpha = 0.65f)
-                )
+                border = BorderStroke(1.5.dp, statusAccentColor.copy(alpha = 0.8f))
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    if (useSimulationMode) {
-                        Surface(
-                            color = SynthAmberWarn.copy(alpha = 0.16f),
-                            shape = RoundedCornerShape(6.dp),
-                            border = BorderStroke(1.dp, SynthAmberWarn.copy(alpha = 0.5f)),
-                            modifier = Modifier.fillMaxWidth()
+                    // Diagnostic Status Banner
+                    Surface(
+                        color = statusAccentColor.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, statusAccentColor.copy(alpha = 0.6f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Security,
-                                    contentDescription = "Режим симуляции",
-                                    tint = SynthAmberWarn,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = when {
+                                    connectedDevice.isReadyToFlash -> Icons.Default.CheckCircle
+                                    verdict == DeviceDiagnosticVerdict.HARD_BRICK_SUSPECTED -> Icons.Default.ErrorOutline
+                                    else -> Icons.Default.UsbOff
+                                },
+                                contentDescription = "Статус подключения",
+                                tint = statusAccentColor,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "SAFETY SIMULATION MODE АКТИВЕН (Безопасная проверка без риска для чипа)",
+                                    text = "СТАТУС ШИНЫ: ${verdict.badgeTitle}",
+                                    fontFamily = JetBrainsMonoFontFamily,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = SynthAmberWarn
+                                    color = statusAccentColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = verdict.summaryTitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(10.dp))
                     }
+
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -133,40 +164,160 @@ fun FlasherScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Icon(
-                                imageVector = Icons.Default.Usb,
-                                contentDescription = "USB Интерфейс",
-                                tint = SynthCyan
+                                imageVector = if (connectedDevice.isConnected) Icons.Default.Usb else Icons.Default.UsbOff,
+                                contentDescription = "USB OTG",
+                                tint = statusAccentColor
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
-                                    text = "Интерфейс USB OTG / Загрузчик",
+                                    text = connectedDevice.productName,
                                     style = MaterialTheme.typography.titleMedium
                                 )
                                 Text(
-                                    text = "${connectedDevice.productName} (${connectedDevice.vidPidHex})",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = SynthCyan
+                                    text = "${connectedDevice.vidPidHex} • ${connectedDevice.bootloaderVersion}",
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = statusAccentColor
                                 )
                             }
                         }
 
                         OutlinedButton(
                             onClick = onRefreshUsb,
+                            modifier = Modifier.testTag("scan_usb_button"),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Refresh,
-                                contentDescription = "Сканировать USB",
+                                contentDescription = "Сканировать USB OTG",
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Скан USB", style = MaterialTheme.typography.labelSmall)
+                            Text("Скан OTG", style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    // Detailed Hardware Telemetry Box
+                    Surface(
+                        color = MaterialTheme.colorScheme.background,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "Шина USB: ${connectedDevice.usbInterfaceSummary}",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SynthCyan
+                            )
+                            Text(
+                                text = "Ответ загрузчика / SysEx ID: ${connectedDevice.detectedFirmwareIdent}",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (connectedDevice.isConnected) SynthPhosphor else SynthAmberWarn
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = connectedDevice.diagnosticDetails,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // If USB device is attached but lacks Android USB permission
+                    if (connectedDevice.isConnected && !connectedDevice.isSimulated && !connectedDevice.hasPermission) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onRequestUsbPermission,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SynthAmberWarn,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.Security, contentDescription = "Разрешить USB")
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "ЗАПРОСИТЬ РАЗРЕШЕНИЕ ANDROID USB HOST",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Interactive Hard-Brick Detector when 0 USB devices are found
+                    if (!connectedDevice.isConnected && !useSimulationMode) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                if (suspectHardBrickCableConnected) Color(0xFFFF5252) else MaterialTheme.colorScheme.outline
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Детектор Hard-Brick (мертвый USB)",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (suspectHardBrickCableConnected) Color(0xFFFF5252) else SynthOrange
+                                        )
+                                        Text(
+                                            text = "Включите, если синтезатор физически подключен кабелем OTG и включен тумблером, но не определяется телефоном",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Switch(
+                                        checked = suspectHardBrickCableConnected,
+                                        onCheckedChange = onSetHardBrickSuspected,
+                                        colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFF5252))
+                                    )
+                                }
+
+                                if (suspectHardBrickCableConnected) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = onOpenUnbricker,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        border = BorderStroke(1.dp, SynthOrange)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Healing,
+                                            contentDescription = "Открыть Unbricker",
+                                            tint = SynthOrange,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Открыть инструкцию Hard-Brick (RP2040 Transporter)",
+                                            color = SynthOrange
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Optional Developer Simulation Mode Toggle (OFF by default)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -174,26 +325,31 @@ fun FlasherScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Режим симуляции оборудования (JieLi WL82)",
+                                text = "Демо-симуляция без железа (только для теста UI)",
                                 style = MaterialTheme.typography.bodyMedium
                             )
                             Text(
-                                text = "Отключите для прямой записи на физический USB OTG порт",
+                                text = if (useSimulationMode) {
+                                    "ВНИМАНИЕ: Активен виртуальный стенд. Отключите для работы с реальным USB OTG!"
+                                } else {
+                                    "Выключено (по умолчанию). Прошивка работает только при подключенном USB OTG."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (useSimulationMode) SynthAmberWarn else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Switch(
                             checked = useSimulationMode,
                             onCheckedChange = onSetSimulationMode,
-                            colors = SwitchDefaults.colors(checkedThumbColor = SynthOrange)
+                            modifier = Modifier.testTag("simulation_mode_switch"),
+                            colors = SwitchDefaults.colors(checkedThumbColor = SynthCyan)
                         )
                     }
 
                     if (useSimulationMode) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = "Профиль виртуального устройства:",
+                            text = "Тестовый профиль виртуального устройства:",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -203,7 +359,11 @@ fun FlasherScreen(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            UsbProfileType.entries.forEach { profile ->
+                            listOf(
+                                UsbProfileType.MVAVE_NORMAL_MIDI,
+                                UsbProfileType.WL82_UBOOT_SOFTBRICK,
+                                UsbProfileType.RP2040_TRANSPORTER_BRIDGE
+                            ).forEach { profile ->
                                 FilterChip(
                                     selected = simulatedProfile == profile,
                                     onClick = { onSelectSimulatedProfile(profile) },
@@ -314,7 +474,6 @@ fun FlasherScreen(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Cryptographic Checksum Verification Box
                         if (checksumReport != null) {
                             val shaMatches = checksumReport.sha256.equals(selectedFirmware.sha256, ignoreCase = true)
                             Surface(
@@ -440,21 +599,29 @@ fun FlasherScreen(
 
                     OutlinedButton(
                         onClick = onBackupNow,
+                        enabled = connectedDevice.isReadyToFlash && !flashState.isFlashing,
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("manual_backup_button"),
-                        border = BorderStroke(1.dp, SynthCyan)
+                        border = BorderStroke(
+                            1.dp,
+                            if (connectedDevice.isReadyToFlash) SynthCyan else MaterialTheme.colorScheme.outline
+                        )
                     ) {
                         Icon(
                             imageVector = Icons.Default.Save,
                             contentDescription = "Сделать дамп",
-                            tint = SynthCyan,
+                            tint = if (connectedDevice.isReadyToFlash) SynthCyan else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Сделать дамп текущих настроек и EEPROM сейчас",
-                            color = SynthCyan
+                            text = if (connectedDevice.isReadyToFlash) {
+                                "Сделать дамп текущих настроек и EEPROM сейчас"
+                            } else {
+                                "Дамп EEPROM недоступен (синтезатор не подключен по OTG)"
+                            },
+                            color = if (connectedDevice.isReadyToFlash) SynthCyan else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -482,20 +649,19 @@ fun FlasherScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = if (progress != null) {
-                                "${(progress.progressFraction * 100).toInt()}% • ${progress.speedKbPerSec.toInt()} KB/s"
-                            } else {
-                                "ГОТОВ К ЗАПИСИ"
+                            text = when {
+                                progress != null -> "${(progress.progressFraction * 100).toInt()}% • ${progress.speedKbPerSec.toInt()} KB/s"
+                                connectedDevice.isReadyToFlash -> "ГОТОВ К ЗАПИСИ"
+                                else -> "ОЖИДАНИЕ USB OTG"
                             },
                             fontFamily = JetBrainsMonoFontFamily,
                             style = MaterialTheme.typography.labelSmall,
-                            color = SynthPhosphor
+                            color = if (connectedDevice.isReadyToFlash) SynthPhosphor else SynthAmberWarn
                         )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Custom Canvas rendering 64 Flash Sectors (First 4 locked boot sectors + 60 app sectors)
                     Canvas(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -516,7 +682,7 @@ fun FlasherScreen(
                                     index <= 4 -> SynthCyan // 0x0000-0x3FFF Protected Bootloader Sectors
                                     index <= completedSectors -> SynthPhosphor
                                     index == completedSectors + 1 && flashState.isFlashing -> SynthOrange
-                                    else -> androidx.compose.ui.graphics.Color(0xFF263040)
+                                    else -> Color(0xFF263040)
                                 }
                                 drawRoundRect(
                                     color = color,
@@ -598,7 +764,7 @@ fun FlasherScreen(
 
                     Button(
                         onClick = onStartFlash,
-                        enabled = !flashState.isFlashing && selectedFirmware != null,
+                        enabled = !flashState.isFlashing && selectedFirmware != null && connectedDevice.isReadyToFlash,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(54.dp)
@@ -609,15 +775,17 @@ fun FlasherScreen(
                         )
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Bolt,
+                            imageVector = if (connectedDevice.isReadyToFlash) Icons.Default.Bolt else Icons.Default.UsbOff,
                             contentDescription = "Прошить"
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (flashState.isFlashing) {
-                                "ИДЕТ ПРОШИВКА И ВЕРИФИКАЦИЯ…"
-                            } else {
-                                "ЗАПУСТИТЬ АВТО-ПРОШИВКУ (0x00004000)"
+                            text = when {
+                                flashState.isFlashing -> "ИДЕТ ПРОШИВКА И ВЕРИФИКАЦИЯ…"
+                                !connectedDevice.isConnected -> "НЕТ USB OTG УСТРОЙСТВА (ПРОШИВКА ЗАБЛОКИРОВАНА)"
+                                !connectedDevice.hasPermission && !connectedDevice.isSimulated -> "ПОДТВЕРДИТЕ ДОСТУП К USB ДЛЯ ПРОШИВКИ"
+                                connectedDevice.isSimulated -> "ЗАПУСТИТЬ ТЕСТОВУЮ СИМУЛЯЦИЮ (0x00004000)"
+                                else -> "ЗАПУСТИТЬ АВТО-ПРОШИВКУ (0x00004000)"
                             },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold

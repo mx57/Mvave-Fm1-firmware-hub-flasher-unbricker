@@ -1,6 +1,11 @@
 package com.example
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
@@ -48,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,8 +62,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.domain.UsbFlashEngine
 import com.example.ui.AppDestination
 import com.example.ui.FirmwareHubViewModel
 import com.example.ui.screens.BackupsAndChecksumScreen
@@ -67,6 +75,7 @@ import com.example.ui.screens.FlasherScreen
 import com.example.ui.screens.LogsAndDocsScreen
 import com.example.ui.screens.UnbrickerScreen
 import com.example.ui.theme.MyApplicationTheme
+import com.example.ui.theme.SynthAmberWarn
 import com.example.ui.theme.SynthCyan
 import com.example.ui.theme.SynthOrange
 import com.example.ui.theme.SynthPhosphor
@@ -115,6 +124,7 @@ fun FirmwareHubApp(
 
     val useSimulationMode by viewModel.useSimulationMode.collectAsStateWithLifecycle()
     val simulatedProfile by viewModel.simulatedProfile.collectAsStateWithLifecycle()
+    val suspectHardBrickCableConnected by viewModel.suspectHardBrickCableConnected.collectAsStateWithLifecycle()
     val connectedDevice by viewModel.connectedDevice.collectAsStateWithLifecycle()
 
     val selectedFirmware by viewModel.selectedFirmware.collectAsStateWithLifecycle()
@@ -126,6 +136,44 @@ fun FirmwareHubApp(
     val logs by viewModel.filteredLogs.collectAsStateWithLifecycle()
     val selectedLogLevel by viewModel.selectedLogLevelFilter.collectAsStateWithLifecycle()
     val selectedDesktopOs by viewModel.selectedDesktopOs.collectAsStateWithLifecycle()
+
+    // Real-time BroadcastReceiver for physical USB OTG attach, detach, and permission grant events
+    DisposableEffect(context) {
+        val usbReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED,
+                    UsbManager.ACTION_USB_DEVICE_DETACHED,
+                    UsbFlashEngine.ACTION_USB_PERMISSION -> {
+                        viewModel.refreshUsbConnection(showToastOnScan = true)
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+            addAction(UsbFlashEngine.ACTION_USB_PERMISSION)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.registerReceiver(
+                context,
+                usbReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        } else {
+            ContextCompat.registerReceiver(
+                context,
+                usbReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        }
+        onDispose {
+            runCatching { context.unregisterReceiver(usbReceiver) }
+        }
+    }
 
     // BackHandler on FirmwareDetailScreen or secondary destinations
     BackHandler(enabled = isShowingFirmwareDetail || currentDestination != AppDestination.CATALOG) {
@@ -170,6 +218,12 @@ fun FirmwareHubApp(
         context.startActivity(Intent.createChooser(sendIntent, subject))
     }
 
+    val topStatusColor = when {
+        connectedDevice.isReadyToFlash && !connectedDevice.isSimulated -> SynthPhosphor
+        connectedDevice.isSimulated -> SynthCyan
+        else -> SynthAmberWarn
+    }
+
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isExpandedScreen = maxWidth >= 640.dp
 
@@ -186,9 +240,11 @@ fun FirmwareHubApp(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "${connectedDevice.vidPidHex} • Каталог: $totalCatalogCount прошивок (Скачано: $downloadedCatalogCount)",
+                                text = "${connectedDevice.diagnosticVerdict.badgeTitle} (${connectedDevice.vidPidHex}) • Каталог: $totalCatalogCount",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (useSimulationMode) SynthCyan else SynthPhosphor
+                                color = topStatusColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     },
@@ -389,10 +445,14 @@ fun FirmwareHubApp(
                                 connectedDevice = connectedDevice,
                                 useSimulationMode = useSimulationMode,
                                 simulatedProfile = simulatedProfile,
+                                suspectHardBrickCableConnected = suspectHardBrickCableConnected,
                                 flashState = flashState,
                                 onSetSimulationMode = viewModel::setSimulationMode,
                                 onSelectSimulatedProfile = viewModel::selectSimulatedProfile,
-                                onRefreshUsb = viewModel::refreshUsbConnection,
+                                onSetHardBrickSuspected = viewModel::setHardBrickCableSuspected,
+                                onRequestUsbPermission = viewModel::requestActiveUsbPermission,
+                                onRefreshUsb = { viewModel.refreshUsbConnection(showToastOnScan = true) },
+                                onOpenUnbricker = { viewModel.navigateTo(AppDestination.UNBRICKER) },
                                 onToggleAutoBackup = viewModel::toggleAutoBackupBeforeFlash,
                                 onToggleVerifyAfterFlash = viewModel::toggleVerifyAfterFlash,
                                 onBackupNow = { viewModel.createDeviceBackupNow() },
@@ -406,8 +466,11 @@ fun FirmwareHubApp(
 
                             AppDestination.UNBRICKER -> UnbrickerScreen(
                                 connectedDevice = connectedDevice,
+                                suspectHardBrickCableConnected = suspectHardBrickCableConnected,
                                 flashState = flashState,
-                                onSelectSimulatedProfile = viewModel::selectSimulatedProfile,
+                                onRefreshUsb = { viewModel.refreshUsbConnection(showToastOnScan = true) },
+                                onRequestUsbPermission = viewModel::requestActiveUsbPermission,
+                                onSetHardBrickSuspected = viewModel::setHardBrickCableSuspected,
                                 onRunSoftBrickRecovery = viewModel::triggerSoftBrickStockRecovery,
                                 onSetWizardStep = viewModel::setUnbrickWizardStep,
                                 onOpenLogsAndScripts = {

@@ -19,10 +19,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ElectricBolt
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Healing
-import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.filled.UsbOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -33,15 +34,18 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.domain.ConnectedUsbDeviceInfo
-import com.example.domain.UsbProfileType
+import com.example.domain.DeviceDiagnosticVerdict
 import com.example.ui.FlashSessionUiState
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.SynthAmberWarn
@@ -52,12 +56,27 @@ import com.example.ui.theme.SynthPhosphor
 @Composable
 fun UnbrickerScreen(
     connectedDevice: ConnectedUsbDeviceInfo,
+    suspectHardBrickCableConnected: Boolean,
     flashState: FlashSessionUiState,
-    onSelectSimulatedProfile: (UsbProfileType) -> Unit,
+    onRefreshUsb: () -> Unit,
+    onRequestUsbPermission: () -> Unit,
+    onSetHardBrickSuspected: (Boolean) -> Unit,
     onRunSoftBrickRecovery: () -> Unit,
     onSetWizardStep: (Int) -> Unit,
     onOpenLogsAndScripts: () -> Unit
 ) {
+    val verdict = connectedDevice.diagnosticVerdict
+    val statusAccentColor = when (verdict) {
+        DeviceDiagnosticVerdict.NORMAL_MODE_READY -> SynthPhosphor
+        DeviceDiagnosticVerdict.SOFT_BRICK_DETECTED,
+        DeviceDiagnosticVerdict.HARD_BRICK_BRIDGE_READY -> SynthOrange
+        DeviceDiagnosticVerdict.SIMULATION_MODE -> SynthCyan
+        DeviceDiagnosticVerdict.PERMISSION_PENDING -> SynthAmberWarn
+        DeviceDiagnosticVerdict.NO_OTG_DEVICE,
+        DeviceDiagnosticVerdict.HARD_BRICK_SUSPECTED,
+        DeviceDiagnosticVerdict.UNSUPPORTED_USB_DEVICE -> Color(0xFFFF5252)
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -65,56 +84,184 @@ fun UnbrickerScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // 1. Header Banner: JieLi AC791N / WL82 Unbrick Center
+        // 1. Live Hardware Brick Analyzer (Normal vs Soft-Brick vs Hard-Brick)
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.5.dp, SynthOrange)
+                border = BorderStroke(1.5.dp, statusAccentColor)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Healing,
-                            contentDescription = "Unbricker",
-                            tint = SynthOrange,
-                            modifier = Modifier.size(26.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = "M-VAVE FM-1 Unbricker Studio",
-                                style = MaterialTheme.typography.headlineMedium
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Default.Healing,
+                                contentDescription = "Диагностика кирпича",
+                                tint = statusAccentColor,
+                                modifier = Modifier.size(26.dp)
                             )
-                            Text(
-                                text = "Восстановление процессора JieLi AC791N / WL82 (Soft-Brick & Hard-Brick)",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Детектор состояния M-VAVE FM-1",
+                                    style = MaterialTheme.typography.titleLarge
+                                )
+                                Text(
+                                    text = "Точное определение Normal Mode / Soft-Brick / Hard-Brick по USB OTG",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = onRefreshUsb,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Проверить USB",
+                                modifier = Modifier.size(16.dp)
                             )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Проверить OTG", style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Surface(
-                        color = MaterialTheme.colorScheme.background,
+                        color = statusAccentColor.copy(alpha = 0.14f),
                         shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        border = BorderStroke(1.dp, statusAccentColor.copy(alpha = 0.65f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = when {
+                                        connectedDevice.isReadyToFlash -> Icons.Default.CheckCircle
+                                        verdict == DeviceDiagnosticVerdict.HARD_BRICK_SUSPECTED -> Icons.Default.ErrorOutline
+                                        else -> Icons.Default.UsbOff
+                                    },
+                                    contentDescription = "Вердикт диагностики",
+                                    tint = statusAccentColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "ДИАГНОЗ: ${verdict.badgeTitle}",
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = statusAccentColor,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                             Text(
-                                text = "ЗОЛОТОЕ ПРАВИЛО ВОССТАНОВЛЕНИЯ M-VAVE FM-1:",
+                                text = "Устройство: ${connectedDevice.productName} (${connectedDevice.vidPidHex})",
+                                fontFamily = JetBrainsMonoFontFamily,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = SynthAmberWarn
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
-                                text = "Никогда не записывайте сырые .fwsc пакеты по адресу 0x0000! Область 0x0000–0x3FFF содержит загрузочный заголовок JieLi WL82. Этот модуль автоматически сохраняет полный дамп памяти и прошивает чистый стоковый образ V16 строго по смещению 0x00004000.",
+                                text = "Дескриптор / Интерфейсы: ${connectedDevice.usbInterfaceSummary}",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SynthCyan
+                            )
+                            Text(
+                                text = connectedDevice.diagnosticDetails,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+
+                    if (connectedDevice.isConnected && !connectedDevice.isSimulated && !connectedDevice.hasPermission) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onRequestUsbPermission,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SynthAmberWarn,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Icon(imageVector = Icons.Default.Security, contentDescription = "Разрешить USB")
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "РАЗРЕШИТЬ ДОСТУП ANDROID USB HOST",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    // Hard-Brick physical check when 0 USB devices enumerate on the bus
+                    if (!connectedDevice.isConnected && !connectedDevice.isSimulated) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.background,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                if (suspectHardBrickCableConnected) Color(0xFFFF5252) else MaterialTheme.colorScheme.outline
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Проверка на Hard-Brick (мертвый загрузчик 0x0000)",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = if (suspectHardBrickCableConnected) Color(0xFFFF5252) else SynthOrange
+                                    )
+                                    Text(
+                                        text = "Если синтезатор включен и подключен исправным OTG-кабелем, но в списке USB 0 устройств — включите этот тумблер для диагностики Hard-Brick.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Switch(
+                                    checked = suspectHardBrickCableConnected,
+                                    onCheckedChange = onSetHardBrickSuspected,
+                                    colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFFF5252))
+                                )
+                            }
+                        }
+                    }
+
+                    flashState.lastCompletedMessage?.let { msg ->
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            color = if (flashState.isError) {
+                                MaterialTheme.colorScheme.errorContainer
+                            } else {
+                                SynthPhosphor.copy(alpha = 0.16f)
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (flashState.isError) {
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                } else {
+                                    SynthPhosphor
+                                },
+                                modifier = Modifier.padding(10.dp)
                             )
                         }
                     }
@@ -157,11 +304,11 @@ fun UnbrickerScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Soft-Brick: Черный экран / WL82 UBOOT1.00",
+                        text = "Soft-Brick: Черный экран / WL82 UBOOT1.00 / OTA Loader",
                         style = MaterialTheme.typography.titleLarge
                     )
                     Text(
-                        text = "Если после неудачной прошивки синтезатор не включает OLED-экран, но при подключении по USB определяется как «WL82 UBOOT1.00», аппаратный загрузчик цел и готов к прямой перезаписи региона 0x4000.",
+                        text = "Если после неудачной прошивки синтезатор не включает OLED-экран, но при подключении по USB определяется как «WL82 UBOOT1.00» (VID_4C4A:PID_8057) или «ota-FM-1», аппаратный загрузчик цел и готов к прямой перезаписи региона 0x4000.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -181,7 +328,7 @@ fun UnbrickerScreen(
                             color = SynthCyan
                         )
                         Text(
-                            text = "1. Захват интерфейса загрузчика WL82 UBOOT1.00 (или посылка SysEx F0 22 24 35 7D F7)",
+                            text = "1. Проверка реального подключения USB OTG и захват интерфейса загрузчика WL82 UBOOT1.00",
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
@@ -193,7 +340,7 @@ fun UnbrickerScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
-                            text = "4. Запись проверенной заводской прошивки Official Stock V16 по адресу 0x00004000 и сверка SHA-256",
+                            text = "4. Запись проверенной заводской прошивки Official Stock V15/V16 по адресу 0x00004000 и сверка SHA-256",
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
@@ -202,7 +349,7 @@ fun UnbrickerScreen(
 
                     Button(
                         onClick = onRunSoftBrickRecovery,
-                        enabled = !flashState.isFlashing,
+                        enabled = !flashState.isFlashing && connectedDevice.isReadyToFlash,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
@@ -213,15 +360,16 @@ fun UnbrickerScreen(
                         )
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Security,
+                            imageVector = if (connectedDevice.isReadyToFlash) Icons.Default.Security else Icons.Default.UsbOff,
                             contentDescription = "Запустить Unbrick"
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (flashState.isFlashing) {
-                                "ВЫПОЛНЯЕТСЯ ВОССТАНОВЛЕНИЕ WL82…"
-                            } else {
-                                "ВОССТАНОВИТЬ СТОК V16 В 1 КЛИК (0x4000)"
+                            text = when {
+                                flashState.isFlashing -> "ВЫПОЛНЯЕТСЯ ВОССТАНОВЛЕНИЕ WL82…"
+                                !connectedDevice.isConnected -> "ПОДКЛЮЧИТЕ СИНТЕЗАТОР ПО OTG ДЛЯ UNBRICK"
+                                !connectedDevice.hasPermission && !connectedDevice.isSimulated -> "ПОДТВЕРДИТЕ ДОСТУП К USB OTG"
+                                else -> "ВОССТАНОВИТЬ СТОК V16 В 1 КЛИК (0x4000)"
                             },
                             fontWeight = FontWeight.Bold
                         )
@@ -236,7 +384,16 @@ fun UnbrickerScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, SynthCyan.copy(alpha = 0.7f))
+                border = BorderStroke(
+                    1.5.dp,
+                    if (verdict == DeviceDiagnosticVerdict.HARD_BRICK_SUSPECTED ||
+                        verdict == DeviceDiagnosticVerdict.HARD_BRICK_BRIDGE_READY
+                    ) {
+                        SynthOrange
+                    } else {
+                        SynthCyan.copy(alpha = 0.7f)
+                    }
+                )
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(
@@ -351,7 +508,7 @@ fun UnbrickerScreen(
                                         color = SynthCyan
                                     )
                                     Text(
-                                        text = "• Нажмите кнопку ниже, чтобы переключить профиль шины на RP2040 Transporter Bridge и записать чистый заводской образ вместе с восстановлением заголовка.",
+                                        text = "• Когда мост RP2040 подключен по USB OTG (VID_2E8A:PID_000A), нажмите кнопку ниже для записи чистого заводского образа и восстановления заголовка.",
                                         style = MaterialTheme.typography.bodyMedium
                                     )
                                 }
@@ -366,21 +523,29 @@ fun UnbrickerScreen(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedButton(
-                            onClick = {
-                                onSelectSimulatedProfile(UsbProfileType.RP2040_TRANSPORTER_BRIDGE)
-                                onRunSoftBrickRecovery()
-                            },
+                            onClick = onRunSoftBrickRecovery,
+                            enabled = connectedDevice.isReadyToFlash && !flashState.isFlashing,
                             modifier = Modifier.weight(1f),
-                            border = BorderStroke(1.dp, SynthCyan)
+                            border = BorderStroke(
+                                1.dp,
+                                if (connectedDevice.isReadyToFlash) SynthCyan else MaterialTheme.colorScheme.outline
+                            )
                         ) {
                             Icon(
                                 imageVector = Icons.Default.ElectricBolt,
                                 contentDescription = "Мост RP2040",
-                                tint = SynthCyan,
+                                tint = if (connectedDevice.isReadyToFlash) SynthCyan else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Прошить через RP2040", color = SynthCyan)
+                            Text(
+                                text = if (connectedDevice.isReadyToFlash) {
+                                    "Прошить через мост"
+                                } else {
+                                    "Мост OTG не подключен"
+                                },
+                                color = if (connectedDevice.isReadyToFlash) SynthCyan else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
 
                         OutlinedButton(

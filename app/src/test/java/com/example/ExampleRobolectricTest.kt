@@ -86,14 +86,21 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `unbrick suite builds SCSI CBW packets, injects wl82loader, unpacks fwsc, and builds 1MB CH341A dump`() = runBlocking {
+    fun `unbrick suite verifies 10 no-solder methods, 3-vector pin shorting, CSW USBS parser, Control Reset, and 1MB dump`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val usbEngine = UsbFlashEngine(context)
 
-        // 1. Verify all 6 Unbrick methods exist
-        assertEquals(6, UnbrickMethodType.entries.size)
+        // 1. Verify all 10 no-solder Unbrick methods and their 4-step PCB guides exist
+        assertEquals(10, UnbrickMethodType.entries.size)
+        UnbrickMethodType.entries.forEach { method ->
+            assertFalse("Method ${method.name} must not require soldering", method.requiresSoldering)
+            assertTrue(method.physicsExplanation.isNotBlank())
+            assertTrue(method.troubleshootingTips.isNotBlank())
+            assertEquals(4, method.steps.size)
+        }
+        assertEquals(3, com.example.domain.SpiPinShortVector.entries.size)
 
-        // 2. Verify 31-byte USB Mass Storage SCSI CBW packet ("USBC" = 0x43425355)
+        // 2. Verify 31-byte USB Mass Storage SCSI CBW packet ("USBC" = 0x43425355) and 13-byte CSW ("USBS" = 0x53425355)
         val cbw = usbEngine.buildJieLiScsiCbwPacket(
             tag = 42,
             transferLength = 4096,
@@ -106,11 +113,26 @@ class ExampleRobolectricTest {
         assertEquals(UsbFlashEngine.SCSI_CBW_SIGNATURE, sig)
         assertEquals(UsbFlashEngine.JL_CDB_VENDOR_GROUP, cbw[15])
 
-        // 3. Verify wl82loader.bin SRAM injection and simulated Soft-Brick pipeline
+        val validCsw = ByteBuffer.allocate(13).order(ByteOrder.LITTLE_ENDIAN).apply {
+            putInt(UsbFlashEngine.SCSI_CSW_SIGNATURE)
+            putInt(42)
+            putInt(0)
+            put(0x00.toByte())
+        }.array()
+        val parsedCsw = usbEngine.parseScsiCswResponse(validCsw, 13, 42)
+        assertTrue(parsedCsw.first)
+        assertTrue(parsedCsw.second.contains("USBS"))
+
+        // 3. Verify wl82loader.bin SRAM injection, Control Transfer EP0 reset, and 5-point USB Bus Audit
         val simSoftBrick = usbEngine.buildSimulatedDevice(UsbProfileType.WL82_UBOOT_SOFTBRICK)
         assertTrue(simSoftBrick.isReadyToFlash)
         val injected = usbEngine.injectWl82LoaderToSram(simSoftBrick) { _, _, _, _ -> }
         assertTrue(injected)
+        val ctrlReset = usbEngine.executeUsbControlTransferReset(simSoftBrick) { _, _, _, _ -> }
+        assertTrue(ctrlReset)
+        val busReport = usbEngine.runUsbBusDiagnostics(simSoftBrick) { _, _, _, _ -> }
+        assertTrue(busReport.passedAllChecks)
+        assertEquals(5, busReport.detailedLines.size)
 
         // 4. Verify FWSC Container Surgeon strips 16KB prefix on .fwsc container
         val dummyFwsc = ByteArray(16384 + 8192) { (it and 0xFF).toByte() }

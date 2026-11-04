@@ -56,4 +56,20 @@ class ExampleUnitTest {
             assertTrue("Expected version history for ${fw.id}", versions.isNotEmpty())
         }
     }
+
+    @Test
+    fun unbrickMethods_all10NoSolderVectorsAnd3PinShortCombinationsAreValid() {
+        assertEquals(10, com.example.domain.UnbrickMethodType.entries.size)
+        com.example.domain.UnbrickMethodType.entries.forEach { method ->
+            assertFalse("Method ${method.name} must be no-solder", method.requiresSoldering)
+            assertTrue(method.physicsExplanation.isNotBlank())
+            assertTrue(method.troubleshootingTips.isNotBlank())
+            assertEquals(4, method.steps.size)
+        }
+        assertEquals(3, com.example.domain.SpiPinShortVector.entries.size)
+        val ramLoader = ChecksumEngine.buildWl82RamLoaderBinary()
+        assertEquals(4096, ramLoader.size)
+        val goldenBoot = ChecksumEngine.buildGoldenBootloaderHeader16Kb()
+        assertEquals(16384, goldenBoot.size)
+    }
 }

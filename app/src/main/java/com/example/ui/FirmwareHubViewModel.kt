@@ -24,9 +24,11 @@ import com.example.domain.EmulatorSynthEngineType
 import com.example.domain.Fm1DspEmulatorEngine
 import com.example.domain.Fm1FirmwareSoundProfiler
 import com.example.domain.SequencerStep
+import com.example.domain.SpiPinShortVector
 import com.example.domain.UnbrickMethodType
 import com.example.domain.UnbrickTargetFirmwareOption
 import com.example.domain.UnbrickUiMode
+import com.example.domain.UsbBusDiagnosticReport
 import com.example.domain.UsbFlashEngine
 import com.example.domain.UsbProfileType
 import kotlinx.coroutines.Job
@@ -106,9 +108,11 @@ data class FlashSessionUiState(
     val isError: Boolean = false,
     val activeUnbrickStep: Int = 0,
     val selectedUnbrickMethod: UnbrickMethodType = UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT,
+    val selectedPinShortVector: SpiPinShortVector = SpiPinShortVector.CS_TO_VCC_SAFE,
     val unbrickUiMode: UnbrickUiMode = UnbrickUiMode.INTERACTIVE_WIZARD,
     val unbrickTargetOption: UnbrickTargetFirmwareOption = UnbrickTargetFirmwareOption.STOCK_V16,
     val wl82LoaderInjected: Boolean = false,
+    val controlTransferResetDone: Boolean = false,
     val bootHeader0x0000Repaired: Boolean = false,
     val isBootloopCatcherActive: Boolean = false,
     val bootloopCatcherAttempts: Int = 0,
@@ -117,6 +121,7 @@ data class FlashSessionUiState(
     val allowBootSectorRebuild: Boolean = false,
     val lastFwscSurgeonReport: String? = null,
     val lastFull1MbDumpSummary: String? = null,
+    val lastBusDiagnosticReport: UsbBusDiagnosticReport? = null,
     val verifiedWizardStages: Set<Int> = emptySet()
 )
 
@@ -525,6 +530,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
         _flashSessionState.update {
             it.copy(
                 selectedUnbrickMethod = method,
+                activeUnbrickStep = 0,
                 allowBootSectorRebuild = method == UnbrickMethodType.FWSC_CONTAINER_SURGEON ||
                     method == UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER
             )
@@ -535,6 +541,18 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 tag = "UNBRICK-METHOD",
                 message = "Выбран вектор реанимации: ${method.title}",
                 hexPayload = "OFFSET=${method.targetOffsetDefault}"
+            )
+        }
+    }
+
+    fun selectPinShortVector(vector: SpiPinShortVector) {
+        _flashSessionState.update { it.copy(selectedPinShortVector = vector) }
+        viewModelScope.launch {
+            repository.log(
+                level = "INFO",
+                tag = "PIN-SHORT-VEC",
+                message = "Выбран вектор замыкания 25Q80: ${vector.shortTitle} (${vector.pinPairLabel})",
+                hexPayload = "PIN_${vector.fromPinNumber}_TO_PIN_${vector.toPinNumber}"
             )
         }
     }
@@ -593,6 +611,76 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
+     * Method 3 (New No-Solder): Executes USB Control Transfer Endpoint 0 reset,
+     * clears ENDPOINT_HALT on Bulk pipes, sends Bulk-Only Mass Storage Reset (0xFF),
+     * and wakes JieLi ISP before injecting `wl82loader.bin`.
+     */
+    fun executeControlTransferResetNow() {
+        if (_flashSessionState.value.isFlashing) return
+        viewModelScope.launch {
+            refreshUsbConnection(showToastOnScan = false)
+            val dev = _connectedDevice.value
+            if (!dev.isReadyToFlash) {
+                val msg = "ОШИБКА CONTROL-RESET: Устройство не подключено по USB OTG (или не выдано разрешение). Подключите синтезатор или включите симуляцию."
+                _flashSessionState.update {
+                    it.copy(isError = true, lastCompletedMessage = msg)
+                }
+                _statusBannerMessage.value = msg
+                return@launch
+            }
+
+            try {
+                usbEngine.executeUsbControlTransferReset(dev) { level, tag, msg, hex ->
+                    repository.log(level, tag, msg, hex)
+                }
+                usbEngine.injectWl82LoaderToSram(dev) { level, tag, msg, hex ->
+                    repository.log(level, tag, msg, hex)
+                }
+                val doneMsg = "СБРОС СТУПОРА USB EP0 УСПЕШЕН: Флаги ENDPOINT_HALT сняты, буферы контроллера очищены и wl82loader.bin (4 КБ) загружен в SRAM 0x010000!"
+                _flashSessionState.update {
+                    it.copy(
+                        controlTransferResetDone = true,
+                        wl82LoaderInjected = true,
+                        isError = false,
+                        lastCompletedMessage = doneMsg,
+                        verifiedWizardStages = it.verifiedWizardStages + setOf(0, 1)
+                    )
+                }
+                _statusBannerMessage.value = doneMsg
+            } catch (e: Exception) {
+                val err = "Ошибка Control Transfer сброса: ${e.localizedMessage}"
+                repository.log("ERROR", "CTRL-RESET-ERR", err)
+                _flashSessionState.update {
+                    it.copy(isError = true, lastCompletedMessage = err)
+                }
+                _statusBannerMessage.value = err
+            }
+        }
+    }
+
+    /**
+     * Method 10 (New Diagnostic Tool): Runs a 5-point low-level hardware audit on the USB OTG bus.
+     */
+    fun runUsbBusDiagnosticsNow() {
+        viewModelScope.launch {
+            refreshUsbConnection(showToastOnScan = false)
+            val dev = _connectedDevice.value
+            val report = usbEngine.runUsbBusDiagnostics(dev) { level, tag, msg, hex ->
+                repository.log(level, tag, msg, hex)
+            }
+            _flashSessionState.update {
+                it.copy(
+                    lastBusDiagnosticReport = report,
+                    isError = !report.passedAllChecks,
+                    lastCompletedMessage = report.summaryTitle,
+                    verifiedWizardStages = if (report.passedAllChecks) it.verifiedWizardStages + 0 else it.verifiedWizardStages
+                )
+            }
+            _statusBannerMessage.value = report.summaryTitle
+        }
+    }
+
+    /**
      * Step 2 / Expert Action: Directly injects `wl82loader.bin` (4 KB) into JieLi AC791N / WL82 SRAM (`0x010000`)
      * via USB Mass Storage SCSI Pass-Through (`0xFD 0x10`) or RP2040 bridge.
      */
@@ -638,9 +726,9 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Method 2 & Method 3: Starts/stops the high-frequency Bootloop & SPI Pin-Shorting Window Catcher.
-     * Polls the USB bus every 180 ms and immediately fires SysEx `F0 22 24 35 7D F7` + `wl82loader.bin` SRAM bootstrap
-     * as soon as the synth powers on or enumerates as `WL82 UBOOT1.00` (`VID_4C4A:PID_8057`) after shorting Pin 6 (CLK) to Pin 4 (GND).
+     * Method 2 (VBUS Glitch), Method 4 (Bootloop Catcher), & Method 5 (3-Vector SPI Pin-Shorting):
+     * Polls the USB bus every 120 ms and immediately fires Control Transfer ISP Wakeup + SysEx `F0 22 24 35 7D F7`
+     * + `wl82loader.bin` SRAM bootstrap as soon as the synth powers on or enumerates as `WL82 UBOOT1.00`.
      */
     fun toggleBootloopAndPinShortCatcher() {
         if (_flashSessionState.value.isBootloopCatcherActive) {
@@ -649,19 +737,20 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             _flashSessionState.update {
                 it.copy(
                     isBootloopCatcherActive = false,
-                    lastCompletedMessage = "Циклический перехватчик бутлупа / Pin-Shorting остановлен."
+                    lastCompletedMessage = "Циклический радар-перехватчик VBUS / Bootloop / Pin-Shorting остановлен."
                 )
             }
             return
         }
 
+        val vec = _flashSessionState.value.selectedPinShortVector
         bootloopCatcherJob?.cancel()
         _flashSessionState.update {
             it.copy(
                 isBootloopCatcherActive = true,
                 bootloopCatcherAttempts = 0,
                 isError = false,
-                lastCompletedMessage = "АКТИВЕН ПЕРЕХВАТЧИК (180 мс): Включите питание FM-1 (или замкните Pin 6 CLK на Pin 4 GND при включении)…"
+                lastCompletedMessage = "АКТИВЕН РАДАР ПЕРЕХВАТА (120 мс): Подайте питание VBUS / включите тумблер FM-1 (или удерживайте ${vec.pinPairLabel})…"
             )
         }
 
@@ -669,11 +758,11 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             repository.log(
                 level = "USB_IO",
                 tag = "CATCHER-START",
-                message = "Запущен высокочастотный перехватчик окна загрузчика (Bootloop SysEx + SPI Pin-Shorting MaskROM).",
-                hexPayload = "POLL_INTERVAL=180ms TARGET=4C4A:8057"
+                message = "Запущен высокочастотный радар перехвата BootROM (VBUS Glitch + Bootloop SysEx + ${vec.shortTitle}).",
+                hexPayload = "POLL_INTERVAL=120ms TARGET=4C4A:8057"
             )
             var attempts = 0
-            while (isActive && attempts < 60) {
+            while (isActive && attempts < 80) {
                 attempts++
                 _flashSessionState.update { it.copy(bootloopCatcherAttempts = attempts) }
                 refreshUsbConnection(showToastOnScan = false)
@@ -681,6 +770,9 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
 
                 if (dev.isReadyToFlash) {
                     runCatching {
+                        usbEngine.executeUsbControlTransferReset(dev) { l, t, m, h ->
+                            repository.log(l, t, m, h)
+                        }
                         if (!dev.profileType.isBootloaderMode) {
                             usbEngine.sendSysExBootloaderTrigger(dev) { l, t, m, h ->
                                 repository.log(l, t, m, h)
@@ -690,12 +782,13 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                             repository.log(l, t, m, h)
                         }
                     }
-                    val caughtMsg = "ПЕРЕХВАТ УСПЕШЕН (попытка #$attempts): Устройство ${dev.productName} (${dev.vidPidHex}) захвачено! Уберите пинцет с пинов SPI Flash — wl82loader.bin уже в SRAM 0x010000."
+                    val caughtMsg = "ПЕРЕХВАТ УСПЕШЕН (цикл #$attempts): Устройство ${dev.productName} (${dev.vidPidHex}) захвачено! Если вы держали пинцет на 25Q80 — УБЕРИТЕ ЕГО СЕЙЧАС, wl82loader.bin (4 КБ) уже в SRAM 0x010000!"
                     repository.log("SUCCESS", "CATCHER-LOCKED", caughtMsg, dev.vidPidHex)
                     _flashSessionState.update {
                         it.copy(
                             isBootloopCatcherActive = false,
                             wl82LoaderInjected = true,
+                            controlTransferResetDone = true,
                             isError = false,
                             lastCompletedMessage = caughtMsg,
                             verifiedWizardStages = it.verifiedWizardStages + setOf(0, 1)
@@ -704,14 +797,14 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     _statusBannerMessage.value = caughtMsg
                     return@launch
                 }
-                delay(180)
+                delay(120)
             }
 
             _flashSessionState.update {
                 it.copy(
                     isBootloopCatcherActive = false,
                     isError = true,
-                    lastCompletedMessage = "Таймаут перехватчика ($attempts циклов): устройство не появилось на шине USB OTG. Проверьте кабель OTG и замыкание Pin 6 (CLK) на Pin 4 (GND) при подаче питания."
+                    lastCompletedMessage = "Таймаут радара ($attempts циклов): устройство не появилось на шине USB OTG. Проверьте кабель OTG или используйте ${vec.shortTitle} при включении питания."
                 )
             }
         }

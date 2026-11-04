@@ -1,2 +1,1 @@
-d3c3f7d6f9f3a30fc03cf463c9032e145eb1333d48658ba7e3a45b51494067dd  releases/FM1-FirmwareHub-Unbricker-v4.0-emulator-debug.apk
-# Release v4.0 — Interactive M-VAVE FM-1 Hardware & DSP Firmware Emulator (44.1 kHz PCM) + 6-Method Unbricker Suite + 160 Firmwares
+c711216605191b34f9386dbc6fa07a0892c9dc8a5d6e43144292c51375ade9d8  FM1-FirmwareHub-Unbricker-v5.0-nosolder-pro-debug.apk

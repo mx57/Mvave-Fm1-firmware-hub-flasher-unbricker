@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
@@ -26,10 +27,12 @@ import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Healing
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
@@ -57,15 +60,19 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.FirmwareEntity
 import com.example.domain.ConnectedUsbDeviceInfo
 import com.example.domain.DeviceDiagnosticVerdict
+import com.example.domain.PcbHighlightZone
+import com.example.domain.SpiPinShortVector
 import com.example.domain.UnbrickMethodType
 import com.example.domain.UnbrickTargetFirmwareOption
 import com.example.domain.UnbrickUiMode
+import com.example.domain.UsbBusDiagnosticReport
 import com.example.domain.UsbProfileType
 import com.example.ui.FlashSessionUiState
 import com.example.ui.theme.JetBrainsMonoFontFamily
@@ -88,12 +95,15 @@ fun UnbrickerScreen(
     onSelectSimulatedProfile: (UsbProfileType) -> Unit,
     onSetHardBrickSuspected: (Boolean) -> Unit,
     onSelectUnbrickMethod: (UnbrickMethodType) -> Unit,
+    onSelectPinShortVector: (SpiPinShortVector) -> Unit,
     onSetUnbrickUiMode: (UnbrickUiMode) -> Unit,
     onSelectTargetOption: (UnbrickTargetFirmwareOption) -> Unit,
     onSetMaxRetries: (Int) -> Unit,
     onSetBlockSize: (Int) -> Unit,
     onToggleBootSectorRebuild: (Boolean) -> Unit,
     onInjectWl82LoaderNow: () -> Unit,
+    onExecuteControlTransferReset: () -> Unit,
+    onRunUsbBusAudit: () -> Unit,
     onToggleBootloopCatcher: () -> Unit,
     onRunFwscSurgeon: () -> Unit,
     onRepairBootHeader0x0000: () -> Unit,
@@ -149,29 +159,47 @@ fun UnbrickerScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = "Центр реанимации M-VAVE FM-1 (6 методов)",
+                                    text = "Центр реанимации M-VAVE FM-1 (10 методов без пайки)",
                                     style = MaterialTheme.typography.titleLarge
                                 )
                                 Text(
-                                    text = "SCSI UBOOT1.00 • wl82loader SRAM • Pin-Short MaskROM • FWSC Surgeon • RP2040 • CH341A 1MB",
+                                    text = "SCSI UBOOT1.00 • VBUS Глитч • Control Reset EP0 • 3-Vector 25Q80 • Сброс АКБ • FWSC • RP2040 • CH341A",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
 
-                        OutlinedButton(
-                            onClick = onRefreshUsb,
-                            modifier = Modifier.testTag("unbrick_scan_usb_button"),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Проверить USB",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Скан OTG", style = MaterialTheme.typography.labelSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OutlinedButton(
+                                onClick = onRunUsbBusAudit,
+                                modifier = Modifier.testTag("unbrick_bus_audit_button"),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                border = BorderStroke(1.dp, SynthCyan)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Radar,
+                                    contentDescription = "Аудит шины USB",
+                                    tint = SynthCyan,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Тест шины", style = MaterialTheme.typography.labelSmall, color = SynthCyan)
+                            }
+
+                            OutlinedButton(
+                                onClick = onRefreshUsb,
+                                modifier = Modifier.testTag("unbrick_scan_usb_button"),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Проверить USB",
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Скан OTG", style = MaterialTheme.typography.labelSmall)
+                            }
                         }
                     }
 
@@ -275,7 +303,7 @@ fun UnbrickerScreen(
                                         color = if (suspectHardBrickCableConnected) Color(0xFFFF5252) else SynthOrange
                                     )
                                     Text(
-                                        text = "Включите для автоматического переключения на Метод 3 (вход в MaskROM замыканием пина SPI Flash без пайки)",
+                                        text = "Включите для активации гида по Hard-Brick без пайки (VBUS-Глитч, 3 вектора замыкания 25Q80 пинцетом или сброс АКБ)",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -294,7 +322,7 @@ fun UnbrickerScreen(
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Quick Simulation Stand Switch on Unbricker Screen for testing all 6 methods
+                    // Quick Simulation Stand Switch on Unbricker Screen for testing all 10 methods
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -307,9 +335,9 @@ fun UnbrickerScreen(
                             )
                             Text(
                                 text = if (useSimulationMode) {
-                                    "Активен: можно протестировать все 6 методов реанимации, инъекцию wl82loader и сборку 1 МБ дампа"
+                                    "Активен: доступны все 10 методов реанимации, тест шины OTG, сброс EP0, инъекция wl82loader и сборка 1 МБ дампа"
                                 } else {
-                                    "Выключен (строгий режим реального USB OTG). Включите для теста всех функций без железа"
+                                    "Выключен (строгий режим реального USB OTG). Включите для проверки всех функций без железа"
                                 },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (useSimulationMode) SynthCyan else MaterialTheme.colorScheme.onSurfaceVariant
@@ -358,7 +386,7 @@ fun UnbrickerScreen(
             }
         }
 
-        // 2. Selector for all 6 Unbrick Methods + UI Mode Switcher (Interactive Wizard vs Expert Console)
+        // 2. Selector for all 10 Unbrick Methods + Expanded Engineering Description & Guides
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -367,7 +395,7 @@ fun UnbrickerScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Выберите метод реанимации (6 векторов Unbrick)",
+                        text = "Арсенал реанимации M-VAVE FM-1 (10 методов без паяльника):",
                         style = MaterialTheme.typography.titleMedium,
                         color = SynthCyan
                     )
@@ -402,7 +430,7 @@ fun UnbrickerScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Active Method Description Box
+                    // Active Method Full Guide & Physics Box
                     Surface(
                         color = MaterialTheme.colorScheme.background,
                         shape = RoundedCornerShape(8.dp),
@@ -411,43 +439,110 @@ fun UnbrickerScreen(
                     ) {
                         Column(
                             modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
+                            Text(
+                                text = activeMethod.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = SynthPhosphor
+                            )
+
+                            // Status badges: No-Solder, Case Open/Closed, Timing Window
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text(
-                                    text = activeMethod.title,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = SynthPhosphor,
-                                    modifier = Modifier.weight(1f)
+                                MethodBadgePill(
+                                    text = "БЕЗ ПАЙКИ (100%)",
+                                    color = SynthPhosphor
+                                )
+                                MethodBadgePill(
+                                    text = if (activeMethod.requiresCaseOpen) {
+                                        "КРЫШКА СНЯТА (ДОСТУП К ПЛАТЕ)"
+                                    } else {
+                                        "БЕЗ РАЗБОРКИ КОРПУСА"
+                                    },
+                                    color = if (activeMethod.requiresCaseOpen) SynthOrange else SynthCyan
+                                )
+                                MethodBadgePill(
+                                    text = activeMethod.timingWindowSpec,
+                                    color = SynthAmberWarn
                                 )
                             }
+
                             Text(
-                                text = "Симптомы: ${activeMethod.subtitle}",
+                                text = "Симптомы кирпича: ${activeMethod.subtitle}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = SynthOrange
                             )
                             Text(
-                                text = "Оборудование: ${activeMethod.hardwareRequirement} • Раздел: ${activeMethod.targetOffsetDefault}",
+                                text = "Инструменты: ${activeMethod.hardwareRequirement} • Раздел: ${activeMethod.targetOffsetDefault}",
                                 fontFamily = JetBrainsMonoFontFamily,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = SynthCyan
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+
                             Text(
                                 text = activeMethod.description,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
+
+                            // Deep Physics & Hardware Mechanism Section
+                            Surface(
+                                color = SynthCyan.copy(alpha = 0.08f),
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, SynthCyan.copy(alpha = 0.35f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(
+                                        text = "Физика работы с чипом JieLi AC791N (WL82) и памятью 25Q80:",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = SynthCyan,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = activeMethod.physicsExplanation,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+
+                            // Troubleshooting & Safety Tips
+                            Surface(
+                                color = SynthOrange.copy(alpha = 0.08f),
+                                shape = RoundedCornerShape(6.dp),
+                                border = BorderStroke(1.dp, SynthOrange.copy(alpha = 0.35f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(
+                                        text = "Важные нюансы и устранение сбоев:",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = SynthOrange,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = activeMethod.troubleshootingTips,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Mode Switcher: Interactive Step-by-Step Wizard vs Manual Expert Engineering Console
+                    // Mode Switcher: Interactive Step-by-Step Master + PCB Visualizer vs Manual Expert Engineering Console
                     Text(
                         text = "Формат управления процессом:",
                         style = MaterialTheme.typography.labelSmall,
@@ -484,25 +579,57 @@ fun UnbrickerScreen(
             }
         }
 
-        // 3. Method-Specific Visual Hardware Guide (Pin-Shorting SOIC-8 Diagram / RP2040 / Bootloop Catcher / FWSC / CH341A)
+        // 3. Interactive Step-by-Step Guide Master with M-VAVE FM-1 Motherboard (PCB) & Contact Point Visualizer
+        item {
+            InteractiveFm1PcbMasterCard(
+                activeMethod = activeMethod,
+                activeStepIndex = flashState.activeUnbrickStep,
+                selectedPinShortVector = flashState.selectedPinShortVector,
+                onSelectStep = onSetWizardStep
+            )
+        }
+
+        // 4. Method-Specific Action & Hardware Tool Card
         item {
             when (activeMethod) {
                 UnbrickMethodType.SPI_PIN_SHORT_MASKROM,
                 UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER -> {
                     SpiFlashPinoutCard(
                         isPinShortMode = activeMethod == UnbrickMethodType.SPI_PIN_SHORT_MASKROM,
+                        selectedVector = flashState.selectedPinShortVector,
                         isCatcherActive = flashState.isBootloopCatcherActive,
                         catcherAttempts = flashState.bootloopCatcherAttempts,
+                        onSelectVector = onSelectPinShortVector,
                         onToggleCatcher = onToggleBootloopCatcher,
                         onExportFull1MbDump = onExportFull1MbDump
                     )
                 }
 
+                UnbrickMethodType.USB_VBUS_GLITCH_HANDSHAKE,
                 UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER -> {
-                    BootloopCatcherCard(
+                    VbusGlitchAndBootloopCatcherCard(
+                        isVbusGlitchMode = activeMethod == UnbrickMethodType.USB_VBUS_GLITCH_HANDSHAKE,
                         isCatcherActive = flashState.isBootloopCatcherActive,
                         catcherAttempts = flashState.bootloopCatcherAttempts,
                         onToggleCatcher = onToggleBootloopCatcher
+                    )
+                }
+
+                UnbrickMethodType.USB_CONTROL_TRANSFER_RESET -> {
+                    ControlTransferResetCard(
+                        resetCompleted = flashState.controlTransferResetDone,
+                        isReadyToFlash = connectedDevice.isReadyToFlash,
+                        isFlashing = flashState.isFlashing,
+                        onExecuteReset = onExecuteControlTransferReset
+                    )
+                }
+
+                UnbrickMethodType.BROWNOUT_PMU_RELEASE -> {
+                    BrownoutPmuReleaseCard(
+                        isCatcherActive = flashState.isBootloopCatcherActive,
+                        catcherAttempts = flashState.bootloopCatcherAttempts,
+                        onToggleCatcher = onToggleBootloopCatcher,
+                        onRefreshUsb = onRefreshUsb
                     )
                 }
 
@@ -525,6 +652,14 @@ fun UnbrickerScreen(
                     )
                 }
 
+                UnbrickMethodType.USB_BUS_DIAGNOSTIC_ANALYZER -> {
+                    UsbBusDiagnosticCard(
+                        report = flashState.lastBusDiagnosticReport,
+                        onRunAudit = onRunUsbBusAudit,
+                        onExecuteControlReset = onExecuteControlTransferReset
+                    )
+                }
+
                 UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT -> {
                     ScsiUbootProtocolCard(
                         wl82LoaderInjected = flashState.wl82LoaderInjected,
@@ -536,7 +671,7 @@ fun UnbrickerScreen(
             }
         }
 
-        // 4. Target Firmware Selection + 5-Stage Auto-Verified Pipeline OR Expert Engineering Console
+        // 5. Target Firmware Selection + 5-Stage Auto-Verified Pipeline OR Expert Engineering Console
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -545,7 +680,7 @@ fun UnbrickerScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Целевая прошивка для восстановления",
+                        text = "Целевая прошивка и конвейер записи M-VAVE FM-1",
                         style = MaterialTheme.typography.titleMedium,
                         color = SynthPhosphor
                     )
@@ -588,18 +723,18 @@ fun UnbrickerScreen(
                     if (flashState.unbrickUiMode == UnbrickUiMode.INTERACTIVE_WIZARD) {
                         // 5-Stage Auto-Verified Interactive Checklist
                         Text(
-                            text = "Автоматическая проверка этапов реанимации (5 шагов):",
+                            text = "Автоматический контроль 5 этапов реанимации:",
                             style = MaterialTheme.typography.labelLarge,
                             color = SynthCyan
                         )
                         Spacer(modifier = Modifier.height(8.dp))
 
                         val stages = listOf(
-                            0 to "Этап 1: Захват шины USB OTG и проверка разрешения (${connectedDevice.vidPidHex})",
-                            1 to "Этап 2: Инъекция вторичного лоадера wl82loader.bin (4 КБ) в SRAM 0x010000",
-                            2 to "Этап 3: Полный резервный дамп SPI Flash + проверка хирурга .fwsc",
-                            3 to "Этап 4: Запись 64 секторов по протоколу SCSI CBW/CSW (${flashState.maxSectorRetries}x авто-повтор)",
-                            4 to "Этап 5: Криптографическая Read-Back сверка SHA-256 / CRC32 и перезапуск DSP"
+                            0 to "Этап 1: Захват шины USB OTG и проверка дескрипторов (${connectedDevice.vidPidHex})",
+                            1 to "Этап 2: Полная инъекция wl82loader.bin (4096 байт) в SRAM 0x010000 + CSW USBS",
+                            2 to "Этап 3: Резервный дамп SPI Flash + проверка хирурга контейнеров .fwsc",
+                            3 to "Этап 4: Честное стирание (0xFD 0x20) и запись 64×4 КБ секторов (${flashState.maxSectorRetries}x повтор)",
+                            4 to "Этап 5: Аппаратная Read-Back сверка (0xFD 0xFA) и перезапуск DSP (0xFD 0xE0)"
                         )
 
                         Column(
@@ -637,13 +772,15 @@ fun UnbrickerScreen(
                             onSetBlockSize = onSetBlockSize,
                             onToggleBootSectorRebuild = onToggleBootSectorRebuild,
                             onInjectWl82LoaderNow = onInjectWl82LoaderNow,
+                            onExecuteControlReset = onExecuteControlTransferReset,
+                            onRunUsbBusAudit = onRunUsbBusAudit,
                             onRunFwscSurgeon = onRunFwscSurgeon,
                             onRepairBootHeader0x0000 = onRepairBootHeader0x0000,
                             onExportFull1MbDump = onExportFull1MbDump
                         )
                     }
 
-                    // Live Progress & SCSI CBW Telemetry
+                    // Live Progress & SCSI CBW / CSW ('USBS') Telemetry
                     if (progress != null) {
                         Spacer(modifier = Modifier.height(12.dp))
                         LinearProgressIndicator(
@@ -669,7 +806,7 @@ fun UnbrickerScreen(
                         )
                         if (progress.scsiCbwHex.isNotBlank()) {
                             Text(
-                                text = "SCSI CBW (USBC): ${progress.scsiCbwHex} • Повторов секторов: ${progress.retryCount}",
+                                text = "CBW (USBC): ${progress.scsiCbwHex} • ${progress.cswStatusHex} • Повторов: ${progress.retryCount}",
                                 fontFamily = JetBrainsMonoFontFamily,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = SynthOrange
@@ -763,12 +900,376 @@ fun UnbrickerScreen(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Build,
-                                contentDescription = "Скрипты для ПК",
+                                contentDescription = "Скрипты и гайды",
                                 tint = SynthOrange,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Скрипты для ПК", color = SynthOrange)
+                            Text("Логи и гайды ПК", color = SynthOrange)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MethodBadgePill(
+    text: String,
+    color: Color
+) {
+    Surface(
+        color = color.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.6f))
+    ) {
+        Text(
+            text = text,
+            fontFamily = JetBrainsMonoFontFamily,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+        )
+    }
+}
+
+/**
+ * Interactive Step-by-Step Master with M-VAVE FM-1 Motherboard (PCB) Topology & Contact Point Visualizer.
+ */
+@Composable
+private fun InteractiveFm1PcbMasterCard(
+    activeMethod: UnbrickMethodType,
+    activeStepIndex: Int,
+    selectedPinShortVector: SpiPinShortVector,
+    onSelectStep: (Int) -> Unit
+) {
+    val steps = activeMethod.steps
+    val safeStepIdx = activeStepIndex.coerceIn(0, (steps.size - 1).coerceAtLeast(0))
+    val currentStep = steps.getOrNull(safeStepIdx) ?: return
+    val highlightZone = currentStep.pcbHighlightZone
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("pcb_visualizer_master_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, SynthPhosphor.copy(alpha = 0.65f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Пошаговый мастер и карта платы M-VAVE FM-1 (PCB Rev A/B/C)",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = SynthPhosphor
+                    )
+                    Text(
+                        text = "Активная точка контакта: ${highlightZone.label}",
+                        fontFamily = JetBrainsMonoFontFamily,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SynthCyan
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Step selector chips (Steps 1..4)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                steps.forEachIndexed { idx, stepGuide ->
+                    val isSelected = idx == safeStepIdx
+                    FilterChip(
+                        selected = isSelected,
+                        onClick = { onSelectStep(idx) },
+                        modifier = Modifier.testTag("wizard_step_chip_$idx"),
+                        label = {
+                            Text(
+                                text = stepGuide.stepBadge,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = SynthPhosphor.copy(alpha = 0.24f),
+                            selectedLabelColor = SynthPhosphor
+                        )
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Interactive M-VAVE FM-1 PCB Layout Canvas
+            Canvas(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(152.dp)
+                    .background(Color(0xFF0A1412), RoundedCornerShape(8.dp))
+                    .padding(10.dp)
+            ) {
+                val w = size.width
+                val h = size.height
+
+                // Outer PCB board outline (dark emerald solder mask)
+                drawRoundRect(
+                    color = Color(0xFF0F241D),
+                    topLeft = Offset.Zero,
+                    size = Size(w, h),
+                    cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                )
+                drawRoundRect(
+                    color = SynthPhosphor.copy(alpha = 0.35f),
+                    topLeft = Offset.Zero,
+                    size = Size(w, h),
+                    cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx()),
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
+
+                // 1. USB Type-C Port (Top-Left)
+                val usbSelected = highlightZone == PcbHighlightZone.USB_C_PORT
+                val usbRectTopLeft = Offset(w * 0.04f, h * 0.08f)
+                val usbRectSize = Size(w * 0.22f, h * 0.26f)
+                drawRoundRect(
+                    color = if (usbSelected) SynthCyan.copy(alpha = 0.35f) else Color(0xFF263238),
+                    topLeft = usbRectTopLeft,
+                    size = usbRectSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                )
+                drawRoundRect(
+                    color = if (usbSelected) SynthCyan else Color(0xFF78909C),
+                    topLeft = usbRectTopLeft,
+                    size = usbRectSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                    style = Stroke(width = if (usbSelected) 2.5.dp.toPx() else 1.dp.toPx())
+                )
+
+                // 2. Power Slide Switch & 5V VBUS Rail (Top-Right)
+                val pwrSelected = highlightZone == PcbHighlightZone.POWER_SWITCH_AND_VBUS
+                val pwrTopLeft = Offset(w * 0.72f, h * 0.08f)
+                val pwrSize = Size(w * 0.24f, h * 0.24f)
+                drawRoundRect(
+                    color = if (pwrSelected) SynthOrange.copy(alpha = 0.35f) else Color(0xFF263238),
+                    topLeft = pwrTopLeft,
+                    size = pwrSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                )
+                drawRoundRect(
+                    color = if (pwrSelected) SynthOrange else Color(0xFF78909C),
+                    topLeft = pwrTopLeft,
+                    size = pwrSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                    style = Stroke(width = if (pwrSelected) 2.5.dp.toPx() else 1.dp.toPx())
+                )
+
+                // 3. JST-PH 2.0 Battery Connector (Bottom-Left, 2-pin Red/Black)
+                val batSelected = highlightZone == PcbHighlightZone.JST_BATTERY_CONNECTOR
+                val batTopLeft = Offset(w * 0.04f, h * 0.64f)
+                val batSize = Size(w * 0.22f, h * 0.28f)
+                drawRoundRect(
+                    color = if (batSelected) SynthAmberWarn.copy(alpha = 0.35f) else Color(0xFF2E353B),
+                    topLeft = batTopLeft,
+                    size = batSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                )
+                drawRoundRect(
+                    color = if (batSelected) SynthAmberWarn else Color(0xFF90A4AE),
+                    topLeft = batTopLeft,
+                    size = batSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                    style = Stroke(width = if (batSelected) 2.5.dp.toPx() else 1.dp.toPx())
+                )
+                // Red & Black battery pins inside JST-PH2
+                drawCircle(
+                    color = Color(0xFFFF5252),
+                    radius = 4.dp.toPx(),
+                    center = Offset(batTopLeft.x + batSize.width * 0.35f, batTopLeft.y + batSize.height * 0.5f)
+                )
+                drawCircle(
+                    color = Color(0xFFB0BEC5),
+                    radius = 4.dp.toPx(),
+                    center = Offset(batTopLeft.x + batSize.width * 0.65f, batTopLeft.y + batSize.height * 0.5f)
+                )
+
+                // 4. Center QFN-48 JieLi AC791N / WL82 SoC
+                val socSelected = highlightZone == PcbHighlightZone.AC791N_SOC_CORE
+                val socSize = Size(w * 0.26f, h * 0.56f)
+                val socTopLeft = Offset(w * 0.35f, h * 0.22f)
+                drawRoundRect(
+                    color = if (socSelected) SynthPhosphor.copy(alpha = 0.28f) else Color(0xFF1A202C),
+                    topLeft = socTopLeft,
+                    size = socSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx())
+                )
+                drawRoundRect(
+                    color = if (socSelected) SynthPhosphor else Color(0xFF607D8B),
+                    topLeft = socTopLeft,
+                    size = socSize,
+                    cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                    style = Stroke(width = if (socSelected) 2.5.dp.toPx() else 1.2.dp.toPx())
+                )
+                // Pin 1 dot on AC791N
+                drawCircle(
+                    color = SynthPhosphor,
+                    radius = 3.dp.toPx(),
+                    center = Offset(socTopLeft.x + 8.dp.toPx(), socTopLeft.y + 8.dp.toPx())
+                )
+
+                // 5. 25Q80 SOIC-8 SPI NOR Flash (Right of SoC)
+                val spiSelected = highlightZone == PcbHighlightZone.SPI_FLASH_25Q80
+                val spiSize = Size(w * 0.18f, h * 0.44f)
+                val spiTopLeft = Offset(w * 0.72f, h * 0.44f)
+                drawRoundRect(
+                    color = if (spiSelected) SynthOrange.copy(alpha = 0.32f) else Color(0xFF1E2636),
+                    topLeft = spiTopLeft,
+                    size = spiSize,
+                    cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+                )
+                drawRoundRect(
+                    color = if (spiSelected) SynthOrange else Color(0xFF78909C),
+                    topLeft = spiTopLeft,
+                    size = spiSize,
+                    cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+                    style = Stroke(width = if (spiSelected) 2.5.dp.toPx() else 1.2.dp.toPx())
+                )
+
+                // Draw 8 pins on 25Q80 SOIC-8 and highlight active pin-short vector
+                val pinRowStep = spiSize.height / 4f
+                for (row in 0 until 4) {
+                    val leftPinNum = row + 1 // Pins 1..4
+                    val rightPinNum = 8 - row // Pins 8..5
+                    val py = spiTopLeft.y + row * pinRowStep + pinRowStep * 0.25f
+                    val leftActive = spiSelected && (
+                        selectedPinShortVector.fromPinNumber == leftPinNum ||
+                            selectedPinShortVector.toPinNumber == leftPinNum
+                        )
+                    val rightActive = spiSelected && (
+                        selectedPinShortVector.fromPinNumber == rightPinNum ||
+                            selectedPinShortVector.toPinNumber == rightPinNum
+                        )
+                    drawRect(
+                        color = if (leftActive) SynthOrange else Color(0xFFB0BEC5),
+                        topLeft = Offset(spiTopLeft.x - 6.dp.toPx(), py),
+                        size = Size(6.dp.toPx(), pinRowStep * 0.5f)
+                    )
+                    drawRect(
+                        color = if (rightActive) SynthPhosphor else Color(0xFFB0BEC5),
+                        topLeft = Offset(spiTopLeft.x + spiSize.width, py),
+                        size = Size(6.dp.toPx(), pinRowStep * 0.5f)
+                    )
+                }
+
+                // 6. Test Pads (TP_DP, TP_DM, TP_GND) between USB-C and SoC
+                val padsSelected = highlightZone == PcbHighlightZone.PCB_TEST_PADS_DP_DM
+                val padX = w * 0.295f
+                listOf(h * 0.35f, h * 0.50f, h * 0.65f).forEachIndexed { idx, py ->
+                    drawCircle(
+                        color = when {
+                            padsSelected -> SynthCyan
+                            idx == 0 -> SynthPhosphor.copy(alpha = 0.7f)
+                            idx == 1 -> SynthCyan.copy(alpha = 0.7f)
+                            else -> Color(0xFF90A4AE)
+                        },
+                        radius = if (padsSelected) 5.5.dp.toPx() else 3.5.dp.toPx(),
+                        center = Offset(padX, py)
+                    )
+                }
+
+                // Draw copper bus traces connecting USB-C -> Test Pads -> AC791N -> 25Q80
+                drawLine(
+                    color = if (usbSelected || padsSelected) SynthCyan else SynthPhosphor.copy(alpha = 0.4f),
+                    start = Offset(usbRectTopLeft.x + usbRectSize.width, usbRectTopLeft.y + usbRectSize.height * 0.5f),
+                    end = Offset(socTopLeft.x, socTopLeft.y + socSize.height * 0.35f),
+                    strokeWidth = 2.dp.toPx()
+                )
+                drawLine(
+                    color = if (spiSelected || socSelected) SynthOrange else SynthPhosphor.copy(alpha = 0.4f),
+                    start = Offset(socTopLeft.x + socSize.width, socTopLeft.y + socSize.height * 0.55f),
+                    end = Offset(spiTopLeft.x, spiTopLeft.y + spiSize.height * 0.5f),
+                    strokeWidth = 2.dp.toPx()
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Legend for PCB zones
+            Text(
+                text = "Топология платы: [Слева вверху] USB-C OTG • [Слева внизу] Штекер АКБ JST-PH2 • [Центр] Чип JieLi AC791N • [Справа вверху] Тумблер ON/OFF • [Справа внизу] Флеш 25Q80 (1 МБ)",
+                fontFamily = JetBrainsMonoFontFamily,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Active Step Instruction Box
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                shape = RoundedCornerShape(8.dp),
+                border = BorderStroke(1.dp, SynthCyan.copy(alpha = 0.6f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${currentStep.stepBadge} — ${currentStep.stepTitle}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = SynthCyan,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        MethodBadgePill(text = currentStep.timingBadge, color = SynthOrange)
+                    }
+
+                    Text(
+                        text = currentStep.detailedInstruction,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    Text(
+                        text = "✓ ${currentStep.verificationHint}",
+                        fontFamily = JetBrainsMonoFontFamily,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SynthPhosphor
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        OutlinedButton(
+                            onClick = { onSelectStep((safeStepIdx - 1).coerceAtLeast(0)) },
+                            enabled = safeStepIdx > 0,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                        ) {
+                            Text("← Предыдущий шаг", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(
+                            onClick = { onSelectStep((safeStepIdx + 1).coerceAtMost(steps.lastIndex)) },
+                            enabled = safeStepIdx < steps.lastIndex,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            border = BorderStroke(1.dp, SynthPhosphor)
+                        ) {
+                            Text("Следующий шаг →", style = MaterialTheme.typography.labelSmall, color = SynthPhosphor)
                         }
                     }
                 }
@@ -780,8 +1281,10 @@ fun UnbrickerScreen(
 @Composable
 private fun SpiFlashPinoutCard(
     isPinShortMode: Boolean,
+    selectedVector: SpiPinShortVector,
     isCatcherActive: Boolean,
     catcherAttempts: Int,
+    onSelectVector: (SpiPinShortVector) -> Unit,
     onToggleCatcher: () -> Unit,
     onExportFull1MbDump: () -> Unit
 ) {
@@ -793,33 +1296,82 @@ private fun SpiFlashPinoutCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
                 text = if (isPinShortMode) {
-                    "Схема микросхемы 25Q80 SOIC-8: Вход в MaskROM замыканием Pin 6 (CLK) на Pin 4 (GND)"
+                    "Микросхема 25Q80 SOIC-8: 3 безопасных вектора входа в MaskROM без пайки"
                 } else {
                     "Схема подключения прищепки SOIC-8 программатора CH341A к микросхеме 25Q80 (1 МБ)"
                 },
                 style = MaterialTheme.typography.titleMedium,
                 color = SynthOrange
             )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = if (isPinShortMode) {
-                    "1. Выключите питание M-VAVE FM-1, подключите USB OTG кабель и нажмите кнопку «Запустить радар-перехватчик» ниже.\n" +
-                        "2. Пинцетом замкните ножку 6 (CLK) на ножку 4 (GND) флеш-памяти 25Q80 и включите тумблер питания синтезатора.\n" +
-                        "3. Чип AC791N не сможет прочитать флеш и мгновенно перейдет в режим WL82 UBOOT1.00 (VID_4C4A:PID_8057). Уберите пинцет и прошейте!"
-                } else {
-                    "Наденьте прищепку SOIC-8 на чип 25Q80 (ключ Pin 1 /CS отмечен точкой на корпусе). Программатор CH341A запишет полный 1 МБ образ (0x000000–0x0FFFFF) напрямую в обход процессора."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+
+            if (isPinShortMode) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SpiPinShortVector.entries.forEach { vector ->
+                        val selected = selectedVector == vector
+                        FilterChip(
+                            selected = selected,
+                            onClick = { onSelectVector(vector) },
+                            modifier = Modifier.testTag("pin_vector_${vector.name.lowercase()}"),
+                            label = {
+                                Text(
+                                    text = vector.shortTitle,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = SynthOrange.copy(alpha = 0.24f),
+                                selectedLabelColor = SynthOrange
+                            )
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.background,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, SynthPhosphor.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "${selectedVector.pinPairLabel} • ${selectedVector.safetyRating}",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SynthPhosphor,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = selectedVector.technicalReason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            } else {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Наденьте прищепку SOIC-8 на чип 25Q80 (ключ Pin 1 /CS отмечен точкой на корпусе). Программатор CH341A запишет полный 1 МБ образ (0x000000–0x0FFFFF) напрямую в обход процессора.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Visual SOIC-8 Chip Pinout Canvas
+            // Visual SOIC-8 Chip Pinout Canvas with dynamic jumper line for the selected vector
             Canvas(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(110.dp)
+                    .height(118.dp)
                     .background(MaterialTheme.colorScheme.background, RoundedCornerShape(8.dp))
                     .padding(12.dp)
             ) {
@@ -836,53 +1388,68 @@ private fun SpiFlashPinoutCard(
                     cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
                 )
 
-                // Pin 1 orientation dot
+                // Pin 1 index dot (top-left)
                 drawCircle(
                     color = SynthCyan,
-                    radius = 4.dp.toPx(),
-                    center = Offset(chipX + 12.dp.toPx(), chipY + 12.dp.toPx())
+                    radius = 5.dp.toPx(),
+                    center = Offset(chipX + 14.dp.toPx(), chipY + 14.dp.toPx())
                 )
 
+                val pinW = 18.dp.toPx()
                 val pinH = 8.dp.toPx()
-                val pinW = 22.dp.toPx()
                 val rowStep = chipH / 4f
 
+                fun pinCenter(pinNumber: Int): Offset {
+                    return if (pinNumber in 1..4) {
+                        val row = pinNumber - 1
+                        Offset(chipX - pinW / 2f, chipY + (rowStep * row) + rowStep / 2f)
+                    } else {
+                        val row = 8 - pinNumber
+                        Offset(chipX + chipW + pinW / 2f, chipY + (rowStep * row) + rowStep / 2f)
+                    }
+                }
+
                 for (i in 0 until 4) {
+                    val leftPin = i + 1
+                    val rightPin = 8 - i
                     val py = chipY + (rowStep * i) + (rowStep - pinH) / 2f
-                    // Left pins 1..4 (Pin 4 is GND)
-                    val leftPinColor = if (i == 3) SynthPhosphor else SynthCyan
+
+                    val leftHighlighted = isPinShortMode &&
+                        (selectedVector.fromPinNumber == leftPin || selectedVector.toPinNumber == leftPin)
+                    val rightHighlighted = isPinShortMode &&
+                        (selectedVector.fromPinNumber == rightPin || selectedVector.toPinNumber == rightPin)
+
                     drawRoundRect(
-                        color = leftPinColor,
+                        color = if (leftHighlighted) SynthPhosphor else Color(0xFF90A4AE),
                         topLeft = Offset(chipX - pinW, py),
                         size = Size(pinW, pinH),
                         cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
                     )
 
-                    // Right pins 8..5 (i=0 -> Pin 8 VCC, i=1 -> Pin 7 /HOLD, i=2 -> Pin 6 CLK, i=3 -> Pin 5 DI)
-                    val rightPinColor = if (i == 2) SynthOrange else SynthCyan
                     drawRoundRect(
-                        color = rightPinColor,
+                        color = if (rightHighlighted) SynthOrange else Color(0xFF90A4AE),
                         topLeft = Offset(chipX + chipW, py),
                         size = Size(pinW, pinH),
                         cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
                     )
                 }
 
-                // Draw dashed jumper bridge between Pin 6 (right row i=2) and Pin 4 (left row i=3)
-                val pin4Center = Offset(chipX - pinW / 2f, chipY + (rowStep * 3) + rowStep / 2f)
-                val pin6Center = Offset(chipX + chipW + pinW / 2f, chipY + (rowStep * 2) + rowStep / 2f)
-                drawLine(
-                    color = SynthOrange,
-                    start = pin4Center,
-                    end = pin6Center,
-                    strokeWidth = 3.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
-                )
+                if (isPinShortMode) {
+                    val startCenter = pinCenter(selectedVector.fromPinNumber)
+                    val endCenter = pinCenter(selectedVector.toPinNumber)
+                    drawLine(
+                        color = SynthOrange,
+                        start = startCenter,
+                        end = endCenter,
+                        strokeWidth = 3.5.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Распиновка 25Q80: Pin 1(/CS) • Pin 2(DO) • Pin 3(/WP) • Pin 4(GND 🟢)  |  Pin 8(VCC 3.3V) • Pin 7(/HOLD) • Pin 6(CLK 🟠) • Pin 5(DI)",
+                text = "Распиновка 25Q80: Pin 1(/CS) • Pin 2(DO) • Pin 3(/WP) • Pin 4(GND)  |  Pin 8(VCC 3.3V) • Pin 7(/HOLD) • Pin 6(CLK) • Pin 5(DI)",
                 fontFamily = JetBrainsMonoFontFamily,
                 style = MaterialTheme.typography.labelSmall,
                 color = SynthCyan
@@ -910,7 +1477,7 @@ private fun SpiFlashPinoutCard(
                         text = if (isCatcherActive) {
                             "ОСТАНОВИТЬ РАДАР ПЕРЕХВАТА (Цикл #$catcherAttempts)…"
                         } else {
-                            "ЗАПУСТИТЬ РАДАР ПЕРЕХВАТА PIN-SHORT MASKROM"
+                            "ЗАПУСТИТЬ РАДАР ПЕРЕХВАТА (${selectedVector.shortTitle})"
                         },
                         fontWeight = FontWeight.Bold
                     )
@@ -937,7 +1504,8 @@ private fun SpiFlashPinoutCard(
 }
 
 @Composable
-private fun BootloopCatcherCard(
+private fun VbusGlitchAndBootloopCatcherCard(
+    isVbusGlitchMode: Boolean,
     isCatcherActive: Boolean,
     catcherAttempts: Int,
     onToggleCatcher: () -> Unit
@@ -949,13 +1517,23 @@ private fun BootloopCatcherCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Высокочастотный перехватчик окна загрузчика (Bootloop & OTA Catcher)",
+                text = if (isVbusGlitchMode) {
+                    "Генератор VBUS-Глитча и захватчика аппаратного BootROM (Окно 0..50 мс)"
+                } else {
+                    "Высокочастотный перехватчик окна загрузчика (Bootloop & OTA Catcher 120 мс)"
+                },
                 style = MaterialTheme.typography.titleMedium,
                 color = SynthAmberWarn
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "Если прошивка повреждена так, что синтезатор зависает через долю секунды после включения, включите перехватчик ДО подачи питания на FM-1. Приложение будет каждые 180 мс посылать сдвоенный пакет F0 22 24 35 7D F7 + SCSI запрос и переведет чип в загрузчик раньше, чем запустится сбойный DSP-код.",
+                text = if (isVbusGlitchMode) {
+                    "1. Выключите тумблер питания M-VAVE FM-1 и выньте кабель USB-C из синтезатора на 5 секунд.\n" +
+                        "2. Нажмите кнопку запуска радара ниже — смартфон начнет непрерывно генерировать пакеты пробуждения JieLi ISP (0x40/0xFD + USBC 0xFD 0x10).\n" +
+                        "3. Включите тумблер FM-1 и резко вставьте штекер USB-C (или нажмите кнопку на USB-хабе), чтобы поймать первые 50 мс старта BootROM без разборки корпуса!"
+                } else {
+                    "Если прошивка повреждена так, что синтезатор зависает через долю секунды после включения, включите радар ДО подачи питания на FM-1. Приложение будет каждые 120 мс посылать сдвоенный пакет F0 22 24 35 7D F7 + Control ISP Wakeup + wl82loader.bin."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -972,17 +1550,268 @@ private fun BootloopCatcherCard(
             ) {
                 Icon(
                     imageVector = if (isCatcherActive) Icons.Default.Stop else Icons.Default.Radar,
-                    contentDescription = "Перехват бутлупа"
+                    contentDescription = "Перехват VBUS/Bootloop"
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = if (isCatcherActive) {
-                        "ОСТАНОВИТЬ АТАКУ SYSEX/SCSI (Попытка #$catcherAttempts)…"
+                        "ОСТАНОВИТЬ РАДАР АТАКИ USBKEY/SYSEX (Цикл #$catcherAttempts)…"
+                    } else if (isVbusGlitchMode) {
+                        "ЗАПУСТИТЬ VBUS-ГЛИТЧ И ПЕРЕХВАТЧИК USBKEY (120 МС)"
                     } else {
-                        "ВКЛЮЧИТЬ ПЕРЕХВАТЧИК БУТЛУПА (180 МС POLLING)"
+                        "ВКЛЮЧИТЬ ПЕРЕХВАТЧИК БУТЛУПА (120 МС POLLING)"
                     },
                     fontWeight = FontWeight.Bold
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ControlTransferResetCard(
+    resetCompleted: Boolean,
+    isReadyToFlash: Boolean,
+    isFlashing: Boolean,
+    onExecuteReset: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, SynthCyan)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.RestartAlt,
+                    contentDescription = "Сброс EP0",
+                    tint = SynthCyan
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Вывод из дескрипторного ступора через Endpoint 0 Control Transfer",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = SynthCyan
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Отправляет по управляющему каналу Endpoint 0 команды CLEAR_FEATURE (ENDPOINT_HALT 0x02/0x01), Bulk-Only Mass Storage Reset (0x21/0xFF) и вендорный импульс пробуждения JieLi ISP (0x40/0xFD), после чего автоматически загружает 4 КБ wl82loader.bin в SRAM.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Button(
+                onClick = onExecuteReset,
+                enabled = isReadyToFlash && !isFlashing,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("control_transfer_reset_button"),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (resetCompleted) SynthPhosphor else SynthCyan,
+                    contentColor = Color.Black
+                )
+            ) {
+                Icon(
+                    imageVector = if (resetCompleted) Icons.Default.CheckCircle else Icons.Default.ElectricBolt,
+                    contentDescription = "Control Reset"
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (resetCompleted) {
+                        "ПАЙПЫ USB EP0 ОЧИЩЕНЫ И WL82LOADER В SRAM (ПОВТОРИТЬ СБРОС)"
+                    } else {
+                        "ВЫПОЛНИТЬ CONTROL TRANSFER СБРОС ПАЙПОВ USB + ИНЪЕКЦИЮ SRAM"
+                    },
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrownoutPmuReleaseCard(
+    isCatcherActive: Boolean,
+    catcherAttempts: Int,
+    onToggleCatcher: () -> Unit,
+    onRefreshUsb: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, SynthOrange)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.BatteryAlert,
+                    contentDescription = "Сброс защиты АКБ",
+                    tint = SynthOrange
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Снятие защиты контроллера питания (PMU Brownout Latch) без пайки",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = SynthOrange
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "• Способ 1 (Без вскрытия корпуса): Выключите FM-1 тумблером OFF, подключите кабель питания на 20 секунд, затем включите радар ниже и переключите тумблер ON.\n" +
+                    "• Способ 2 (При глубокой блокировке PMU): Снимите нижнюю крышку, пальцами или пинцетом выньте белый 2-контактный штекер аккумулятора JST-PH 2.0 на 10 секунд, включите тумблер для разряда конденсаторов и подключите USB OTG без батареи!",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onToggleCatcher,
+                    modifier = Modifier.weight(1.4f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isCatcherActive) Color(0xFFFF5252) else SynthOrange,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Icon(
+                        imageVector = if (isCatcherActive) Icons.Default.Stop else Icons.Default.PlayArrow,
+                        contentDescription = "Холодный старт VBUS"
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (isCatcherActive) "РАДАР АКТИВЕН (#$catcherAttempts)" else "РАДАР ХОЛОДНОГО СТАРТА VBUS",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onRefreshUsb,
+                    modifier = Modifier.weight(1f),
+                    border = BorderStroke(1.dp, SynthCyan)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Проверить шину",
+                        tint = SynthCyan,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Проверить USB", style = MaterialTheme.typography.labelSmall, color = SynthCyan)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsbBusDiagnosticCard(
+    report: UsbBusDiagnosticReport?,
+    onRunAudit: () -> Unit,
+    onExecuteControlReset: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, SynthCyan)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = "Аудит шины USB OTG",
+                    tint = SynthCyan
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "5-уровневый диагностический стенд шины USB OTG и пакетов USBC/USBS",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = SynthCyan
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Проверяет поддержку USB Host, наличие линий данных D+/D- в кабеле, чтение дескрипторов через Endpoint 0, целостность пайпов Bulk IN/OUT и прохождение команд SCSI CBW/CSW.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (report != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.background,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (report.passedAllChecks) SynthPhosphor else SynthOrange
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = report.summaryTitle,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (report.passedAllChecks) SynthPhosphor else SynthOrange,
+                            fontWeight = FontWeight.Bold
+                        )
+                        report.detailedLines.forEach { line ->
+                            Text(
+                                text = "• $line",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = "HEX: ${report.rawHexTelemetry}",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SynthCyan
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onRunAudit,
+                    modifier = Modifier
+                        .weight(1.3f)
+                        .testTag("run_usb_bus_audit_card_button"),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = SynthCyan,
+                        contentColor = Color.Black
+                    )
+                ) {
+                    Icon(imageVector = Icons.Default.Radar, contentDescription = "Запустить аудит")
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("ЗАПУСТИТЬ АУДИТ ШИНЫ USB", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                }
+
+                OutlinedButton(
+                    onClick = onExecuteControlReset,
+                    modifier = Modifier.weight(1f),
+                    border = BorderStroke(1.dp, SynthOrange)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.RestartAlt,
+                        contentDescription = "Сброс EP0",
+                        tint = SynthOrange,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Сброс EP0 Halt", style = MaterialTheme.typography.labelSmall, color = SynthOrange)
+                }
             }
         }
     }
@@ -1127,7 +1956,7 @@ private fun ScsiUbootProtocolCard(
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "Перед записью секторов во флеш-память в чип JieLi WL82 отправляется 31-байтный пакет SCSI CBW ('USBC' 0xFD 0x10) со вторичным RAM-загрузчиком wl82loader.bin по адресу SRAM 0x00010000.",
+                text = "Перед записью секторов во флеш-память в чип JieLi WL82 отправляется 31-байтный пакет SCSI CBW ('USBC' 0xFD 0x10), за которым следуют все 4096 байт вторичного RAM-драйвера wl82loader.bin по адресу SRAM 0x00010000 с проверкой 13-байтного ответа CSW ('USBS').",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1149,9 +1978,9 @@ private fun ScsiUbootProtocolCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = if (wl82LoaderInjected) {
-                        "wl82loader.bin АКТИВЕН В SRAM 0x010000 (ПОВТОРИТЬ ИНЪЕКЦИЮ)"
+                        "wl82loader.bin (4 КБ) АКТИВЕН В SRAM 0x010000 (ПОВТОРИТЬ ИНЪЕКЦИЮ)"
                     } else {
-                        "ШАГ 1: ИНЪЕКТИРОВАТЬ wl82loader.bin В SRAM 0x010000 СЕЙЧАС"
+                        "ШАГ 1: ИНЪЕКТИРОВАТЬ wl82loader.bin (4096 БАЙТ) В SRAM 0x010000 СЕЙЧАС"
                     },
                     color = if (wl82LoaderInjected) SynthPhosphor else SynthCyan,
                     fontWeight = FontWeight.Bold
@@ -1173,7 +2002,7 @@ private fun Rp2040BridgeWizardCard(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = "Мастер подключения моста RP2040 / Pi Pico Transporter",
+                text = "Быстрая памятка распиновки моста RP2040 / Pi Pico Transporter",
                 style = MaterialTheme.typography.titleMedium,
                 color = SynthCyan
             )
@@ -1239,6 +2068,8 @@ private fun ExpertEngineeringConsoleSection(
     onSetBlockSize: (Int) -> Unit,
     onToggleBootSectorRebuild: (Boolean) -> Unit,
     onInjectWl82LoaderNow: () -> Unit,
+    onExecuteControlReset: () -> Unit,
+    onRunUsbBusAudit: () -> Unit,
     onRunFwscSurgeon: () -> Unit,
     onRepairBootHeader0x0000: () -> Unit,
     onExportFull1MbDump: () -> Unit
@@ -1254,7 +2085,7 @@ private fun ExpertEngineeringConsoleSection(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = "Инженерная панель низкоуровневых параметров SCSI / SPI:",
+                text = "Инженерная панель низкоуровневых параметров SCSI / SPI / EP0:",
                 style = MaterialTheme.typography.labelLarge,
                 color = SynthOrange
             )
@@ -1338,12 +2169,36 @@ private fun ExpertEngineeringConsoleSection(
                 }
 
                 OutlinedButton(
+                    onClick = onExecuteControlReset,
+                    enabled = isReadyToFlash && !flashState.isFlashing,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(imageVector = Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Сброс EP0 Halt", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
                     onClick = onRunFwscSurgeon,
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(imageVector = Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Хирург .fwsc", style = MaterialTheme.typography.labelSmall)
+                }
+
+                OutlinedButton(
+                    onClick = onRunUsbBusAudit,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(imageVector = Icons.Default.Radar, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Аудит шины OTG", style = MaterialTheme.typography.labelSmall)
                 }
             }
 

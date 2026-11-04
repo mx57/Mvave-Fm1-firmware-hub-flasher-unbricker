@@ -1,18 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- JieLi WL82 / AC791N UBOOT1.00 Soft-Brick Bootloader Mode (VID 0x4C4A = 19530, PID 0x8057 = 32855) -->
-    <usb-device vendor-id="19530" product-id="32855" />
-    <!-- M-VAVE FM-1 Standard USB-MIDI / CDC Mode (VID 0x4C4A = 19530, Sinco VID 0x2224 = 8740) -->
+    <!-- JieLi WL82 / AC791N / BR23 / BR25 UBOOT1.00 & MaskROM Bootloader Modes (VID 0x4C4A = 19530) -->
+    <usb-device vendor-id="19530" product-id="32855" /> <!-- 0x4C4A:0x8057 WL82 UBOOT1.00 Soft-Brick -->
+    <usb-device vendor-id="19530" product-id="32854" /> <!-- 0x4C4A:0x8056 JieLi MaskROM / Forced Upgrade -->
+    <usb-device vendor-id="19530" product-id="16725" /> <!-- 0x4C4A:0x4155 M-VAVE FM-1 Normal USB-MIDI -->
+    <usb-device vendor-id="19530" product-id="16726" /> <!-- 0x4C4A:0x4156 M-VAVE FM-1 / SMK-37 Alt MIDI/CDC -->
     <usb-device vendor-id="19530" />
+
+    <!-- Sinco Audio / M-VAVE USB-MIDI & OTA Bootloader VID (0x2224 = 8740) -->
+    <usb-device vendor-id="8740" product-id="13693" /> <!-- 0x2224:0x357D M-VAVE Boot Trigger / OTA -->
     <usb-device vendor-id="8740" />
+
     <!-- Seeed Studio XIAO RP2040 / Raspberry Pi Pico FM-1 Transporter Bridge (VID 0x2E8A = 11914) -->
+    <usb-device vendor-id="11914" product-id="10" />    <!-- 0x2E8A:0x000A RP2040 CDC Serial Bridge -->
+    <usb-device vendor-id="11914" product-id="3" />     <!-- 0x2E8A:0x0003 RP2040 UF2 Boot -->
     <usb-device vendor-id="11914" />
-    <!-- WinChipHead CH341A USB SPI NOR Flash Programmer (VID 0x1A86 = 6790, PID 0x5512 = 21778 / 0x5523 = 21795) -->
-    <usb-device vendor-id="6790" product-id="21778" />
-    <usb-device vendor-id="6790" product-id="21795" />
+
+    <!-- WinChipHead CH341A USB SPI NOR Flash Programmer (VID 0x1A86 = 6790) -->
+    <usb-device vendor-id="6790" product-id="21778" />  <!-- 0x1A86:0x5512 CH341A SPI/I2C/Parallel Mode -->
+    <usb-device vendor-id="6790" product-id="21795" />  <!-- 0x1A86:0x5523 CH341A Serial Mode -->
+    <usb-device vendor-id="6790" product-id="29987" />  <!-- 0x1A86:0x7523 CH340/CH341 UART Bridge -->
     <usb-device vendor-id="6790" />
-    <!-- USB Audio/MIDI (Class 1), CDC (Class 2), and Mass Storage SCSI BOT (Class 8 for WL82 UBOOT1.00) -->
+
+    <!-- USB Audio/MIDI (Class 1), CDC (Class 2), Mass Storage SCSI BOT (Class 8), Vendor Spec (Class 255) -->
     <usb-device class="1" />
     <usb-device class="2" />
     <usb-device class="8" />
+    <usb-device class="255" />
 </resources>

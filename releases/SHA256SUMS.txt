@@ -1,1 +1,1 @@
-c711216605191b34f9386dbc6fa07a0892c9dc8a5d6e43144292c51375ade9d8  FM1-FirmwareHub-Unbricker-v5.0-nosolder-pro-debug.apk
+51fd6a0a364afda68520f2d353044b9bfc611baf3535aae2720925093611f710  FM1-FirmwareHub-Unbricker-v6.0-wire-ota-scsi-debug.apk

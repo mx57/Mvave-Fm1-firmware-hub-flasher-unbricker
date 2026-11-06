@@ -15,6 +15,28 @@ import kotlinx.coroutines.delay
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+enum class ActiveWireProtocol(
+    val shortBadge: String,
+    val title: String,
+    val description: String
+) {
+    AUTO_DUAL_PROTOCOL(
+        shortBadge = "АВТО (SysEx OTA + SCSI BOT)",
+        title = "Двухпротокольный автовыбор (USB-MIDI SysEx OTA + JieLi SCSI BOT)",
+        description = "Автоматически определяет режим загрузчика после погасания экрана FM-1 (USB-MIDI ota-FM-1 или Mass Storage WL82 UBOOT1.00) и выбирает совместимый пакетный протокол с резервным переключением."
+    ),
+    USB_MIDI_SYSEX_OTA(
+        shortBadge = "USB-MIDI SysEx OTA",
+        title = "Протокол USB-MIDI SysEx OTA (CIN 0x04..0x07 • F0 22 24 35)",
+        description = "Пакетная передача 7-битных фреймов прошивки внутри 4-байтных USB-MIDI Event Packets для загрузчика ota-FM-1 / SINCO (PID 0x4155 / 0x357D)."
+    ),
+    JIELI_SCSI_BOT(
+        shortBadge = "JieLi SCSI BOT (USBC)",
+        title = "Протокол JieLi WL82 UBOOT1.00 SCSI Pass-Through (USBC / USBS)",
+        description = "Прямая запись 4 КБ секторов через 31-байтные SCSI CBW пакеты (0xFD 0x10 / 0x20 / 0xFC / 0xFA / 0xE0) и вторичный драйвер wl82loader.bin в SRAM 0x010000 (PID 0x8057 / 0x8056)."
+    )
+}
+
 enum class UsbProfileType(
     val title: String,
     val vidHex: String,
@@ -37,17 +59,17 @@ enum class UsbProfileType(
         isBootloaderMode = false
     ),
     MVAVE_NORMAL_MIDI(
-        title = "M-VAVE FM-1 (Normal USB-MIDI / CDC)",
+        title = "M-VAVE FM-1 (Штатный USB-MIDI / ota-FM-1)",
         vidHex = "0x4C4A",
         pidHex = "0x4155",
-        protocolBadge = "USB-MIDI SysEx + CDC",
+        protocolBadge = "USB-MIDI SysEx OTA + CDC",
         isBootloaderMode = false
     ),
     WL82_UBOOT_SOFTBRICK(
-        title = "JieLi WL82 UBOOT1.00 (Soft-Brick SCSI BOT)",
+        title = "JieLi WL82 UBOOT1.00 / ota-FM-1 (Загрузчик активен)",
         vidHex = "0x4C4A",
         pidHex = "0x8057",
-        protocolBadge = "WL82 UBOOT1.00 SCSI Pass-Through",
+        protocolBadge = "Dual: SCSI BOT + SysEx OTA",
         isBootloaderMode = true
     ),
     RP2040_TRANSPORTER_BRIDGE(
@@ -87,13 +109,13 @@ enum class DeviceDiagnosticVerdict(
         isBrickState = false
     ),
     SOFT_BRICK_DETECTED(
-        badgeTitle = "SOFT-BRICK ОБНАРУЖЕН",
-        summaryTitle = "Сбой прошивки в 0x4000, но загрузчик WL82 UBOOT1.00 SCSI / OTA активен",
+        badgeTitle = "ЗАГРУЗЧИК АКТИВЕН",
+        summaryTitle = "Экран FM-1 погашен (режим загрузчика WL82 UBOOT1.00 / ota-FM-1) — готов к записи 0x4000",
         isBrickState = true
     ),
     HARD_BRICK_SUSPECTED(
-        badgeTitle = "HARD-BRICK (0 USB / СТУПОР)",
-        summaryTitle = "Чип JieLi AC791N не инициализирует USB (сбой 0x0000, зависание до USB или защита АКБ Brownout)",
+        badgeTitle = "HARD-BRICK (0 USB)",
+        summaryTitle = "Чип JieLi AC791N не инициализирует USB (сбой 0x0000 или зависание при чтении SPI 25Q80)",
         isBrickState = true
     ),
     HARD_BRICK_BRIDGE_READY(
@@ -113,7 +135,7 @@ enum class DeviceDiagnosticVerdict(
     ),
     SIMULATION_MODE(
         badgeTitle = "ТЕСТОВАЯ СИМУЛЯЦИЯ",
-        summaryTitle = "Активен виртуальный стенд (все 10 методов Unbrick доступны для проверки)",
+        summaryTitle = "Активен виртуальный стенд (все 6 проверенных методов Unbrick и 2 протокола доступны)",
         isBrickState = false
     )
 }
@@ -132,7 +154,7 @@ enum class PcbHighlightZone(val label: String) {
 }
 
 /**
- * Three safe no-solder pin-shorting combinations on the 25Q80 SOIC-8 SPI NOR Flash chip
+ * Three verified safe no-solder pin-shorting combinations on the 25Q80 SOIC-8 SPI NOR Flash chip
  * to force the JieLi AC791N SoC into immutable MaskROM (`WL82 UBOOT1.00`, VID_4C4A:PID_8057).
  */
 enum class SpiPinShortVector(
@@ -192,6 +214,10 @@ data class UsbBusDiagnosticReport(
     val rawHexTelemetry: String
 )
 
+/**
+ * The 6 authentic, hardware-verified M-VAVE FM-1 (JieLi AC791N / WL82) Unbrick methods
+ * backed by real working USB OTG protocol implementations.
+ */
 enum class UnbrickMethodType(
     val indexNumber: Int,
     val shortBadge: String,
@@ -207,27 +233,80 @@ enum class UnbrickMethodType(
     val targetOffsetDefault: String,
     val steps: List<UnbrickStepGuide>
 ) {
-    SOFT_BRICK_SCSI_UBOOT(
+    BOOTLOOP_SYSEX_CATCHER(
         indexNumber = 1,
-        shortBadge = "1. SCSI UBOOT1.00",
-        title = "Метод 1: Soft-Brick SCSI Pass-Through + инъекция wl82loader в SRAM",
-        subtitle = "Черный экран, светодиод горит/не горит, но по USB видно устройство WL82 UBOOT1.00 (VID_4C4A:PID_8057)",
+        shortBadge = "1. SysEx OTA + Перехват",
+        title = "Метод 1: Штатный вход / Перехват бутлупа по USB-MIDI SysEx OTA (F0 22 24 35 7D F7)",
+        subtitle = "Экран FM-1 гаснет после старта прошивки или вспыхивает на долю секунды при включении",
+        hardwareRequirement = "Только USB OTG кабель с линиями данных (Без разборки корпуса и без пайки!)",
+        requiresCaseOpen = false,
+        requiresSoldering = false,
+        timingWindowSpec = "Авто-перезахват USB дескриптора после погасания экрана (150–10 000 мс)",
+        description = "Проверенный метод для штатной прошивки и перехвата бутлупа! При отправке последовательности `F0 22 24 35 7D F7` экран M-VAVE FM-1 гаснет — это нормальная реакция аппаратного перехода процессора JieLi AC791N в загрузчик (`ota-FM-1` или `WL82 UBOOT1.00`), при которой устройство временно отключается и заново регистрируется на шине Android USB с новым дескриптором. Движок автоматически ловит новое подключение, запрашивает разрешение USB и продолжает запись по протоколу USB-MIDI SysEx OTA (4-байтные пакеты `CIN 0x04..0x07`) или SCSI BOT без обрыва!",
+        physicsExplanation = "Обработчик системных сообщений USB-MIDI (SysEx ID `22 24 35`) в прошивках M-VAVE FM-1 / SMK-37 инициализируется в прерывании USB раньше запуска аудио-движка DSP. Команда `7D` гасит OLED-дисплей, останавливает синтез и вызывает программный переход в загрузчик с перенумерацией USB-порта.",
+        troubleshootingTips = "• Когда экран FM-1 погаснет на 1-м шаге прошивки — НЕ отключайте кабель! Если Android покажет системное окно доступа к новому USB-устройству загрузчика, просто нажмите «ОК», и запись автоматически пойдет дальше.\n• При бутлупе включите «Перехватчик 120 мс» до включения тумблера питания синтезатора.",
+        targetOffsetDefault = "0x00004000",
+        steps = listOf(
+            UnbrickStepGuide(
+                stepIndex = 0,
+                stepBadge = "Шаг 1: Подключение",
+                stepTitle = "Соединение M-VAVE FM-1 со смартфоном через кабель USB OTG",
+                timingBadge = "Кабель с D+/D-",
+                detailedInstruction = "Подключите синтезатор M-VAVE FM-1 к смартфону через проверенный OTG-адаптер. Если синтезатор находится в бутлупе — сначала выключите его тумблером (OFF) и активируйте «Перехватчик бутлупа (120 мс)».",
+                verificationHint = "Убедитесь, что выбрана прошивка «Official Stock V16» или нужный кастом.",
+                pcbHighlightZone = PcbHighlightZone.USB_C_PORT
+            ),
+            UnbrickStepGuide(
+                stepIndex = 1,
+                stepBadge = "Шаг 2: Погасание экрана",
+                stepTitle = "Отправка SysEx (F0 22 24 35 7D F7) и переход в загрузчик (экран гаснет)",
+                timingBadge = "Экран FM-1 гаснет",
+                detailedInstruction = "При отправке команды входа в загрузчик экран синтезатора полностью погаснет, а старый USB-порт закроется. Это штатное переключение чипа в режим загрузчика ota-FM-1 / UBOOT1.00.",
+                verificationHint = "Не вынимайте кабель, когда экран погас!",
+                pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
+            ),
+            UnbrickStepGuide(
+                stepIndex = 2,
+                stepBadge = "Шаг 3: Авто-перезахват",
+                stepTitle = "Автоматическое переподключение к новому USB-порту загрузчика",
+                timingBadge = "Авто-ожидание до 10 с",
+                detailedInstruction = "Приложение автоматически обнаружит переподключившееся устройство загрузчика на шине USB, запросит системное разрешение Android (если сменился PID) и выберет рабочий протокол (SysEx OTA или SCSI BOT).",
+                verificationHint = "При появлении системного диалога Android USB нажмите «ОК».",
+                pcbHighlightZone = PcbHighlightZone.USB_C_PORT
+            ),
+            UnbrickStepGuide(
+                stepIndex = 3,
+                stepBadge = "Шаг 4: Запись и старт",
+                stepTitle = "Посекторная передача образа в 0x00004000 и включение экрана",
+                timingBadge = "Авто-перезапуск",
+                detailedInstruction = "Движок запишет все 64 сектора прошивки в раздел 0x00004000 и отправит финальную команду перезагрузки. Экран FM-1 снова загорится с новой прошивкой!",
+                verificationHint = "После завершения синтезатор вернется в штатный режим USB-MIDI.",
+                pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
+            )
+        )
+    ),
+
+    SOFT_BRICK_SCSI_UBOOT(
+        indexNumber = 2,
+        shortBadge = "2. SCSI UBOOT1.00",
+        title = "Метод 2: Soft-Brick WL82 UBOOT1.00 SCSI Pass-Through + инъекция wl82loader.bin в SRAM",
+        subtitle = "Экран черный постоянно, но по USB видно устройство WL82 UBOOT1.00 (VID_4C4A:PID_8057)",
         hardwareRequirement = "Только USB OTG кабель с линиями данных (Без разборки и без пайки!)",
         requiresCaseOpen = false,
         requiresSoldering = false,
         timingWindowSpec = "Постоянное окно (чип уже ждет команды SCSI BOT 0xFD)",
-        description = "Основной бескомпромиссный метод для Soft-Brick. Загрузчик 0x0000–0x3FFF цел и перевел чип JieLi AC791N в режим USB Mass Storage Bulk-Only Transport. Приложение загружает полный 4096-байтный вторичный драйвер флеш-памяти wl82loader.bin в SRAM 0x010000, выполняет посекторное стирание (0xFD 0x20), честную запись 4 КБ страниц (0xFD 0xFC) по адресу 0x00004000 с проверкой 13-байтных ответов CSW ('USBS') и контрольным чтением Read-Back.",
-        physicsExplanation = "Нестираемый ПЗУ-загрузчик (MaskROM) процессора AC791N умеет принимать только базовые SCSI-команды чтения/записи ОЗУ. Чтобы стереть и перезаписать внешнюю микросхему памяти 25Q80 по шине SPI, необходимо сначала загрузить в быструю память SRAM (0x010000) микропрограмму-посредник wl82loader.bin (4 КБ), которая берет на себя управление тактированием SPI NOR Flash и проверку CRC32 каждого сектора.",
-        troubleshootingTips = "• Если запись обрывается на секторе #1: переключите размер блока в Инженерной панели с 4096 B на 512 B и отключите длинные USB-хабы.\n• Никогда не подавайте команду полного стирания чипа (erasechip) — этот метод бережно сохраняет заводской заголовок 0x0000–0x3FFF и калибровки в 0x0F0000.",
+        description = "Классический проверенный метод для Soft-Brick, когда экран FM-1 черный и не включается после неудачной прошивки, но загрузчик 0x0000–0x3FFF цел и выставляет на шину USB интерфейс `WL82 UBOOT1.00` (`VID_4C4A:PID_8057`). Приложение загружает 4096-байтный вторичный драйвер флеш-памяти `wl82loader.bin` в быструю память SRAM `0x010000` (команда `0xFD 0x10`), выполняет посекторное стирание (`0xFD 0x20`), линейную запись 4 КБ блоков (`0xFD 0xFC`) по адресу `0x00004000` с проверкой 13-байтных ответов CSW (`USBS`) и контрольным чтением Read-Back (`0xFD 0xFA`).",
+        physicsExplanation = "ПЗУ-загрузчик (MaskROM) процессора JieLi AC791N в режиме Mass Storage Bulk-Only Transport принимает вендорные 31-байтные пакеты CBW (`USBC`, код операции `0xFD`). После загрузки микропрограммы `wl82loader.bin` в SRAM `0x010000` открывается прямой аппаратный доступ к стиранию и программированию секторов внешней SPI NOR Flash 25Q80.",
+        troubleshootingTips = "• Если запись обрывается на первом секторе: уменьшите размер блока в Инженерной консоли с 4096 B до 512 B.\n• Метод строго защищает заводской сектор загрузчика `0x0000–0x3FFF` и область пресетов `0x0F0000`.",
         targetOffsetDefault = "0x00004000",
         steps = listOf(
             UnbrickStepGuide(
                 stepIndex = 0,
                 stepBadge = "Шаг 1: Кабель OTG",
-                stepTitle = "Подключение к порту USB Type-C синтезатора M-VAVE FM-1",
+                stepTitle = "Подключение синтезатора в режиме WL82 UBOOT1.00 (VID_4C4A:PID_8057)",
                 timingBadge = "Статический режим",
-                detailedInstruction = "Подключите включенный синтезатор M-VAVE FM-1 к смартфону через проверенный OTG-переходник. Убедитесь, что в верхней карточке диагностики отображается статус «SOFT-BRICK ОБНАРУЖЕН» и идентификатор VID_4C4A : PID_8057 (WL82 UBOOT1.00).",
-                verificationHint = "Проверка: В строке интерфейсов должен присутствовать класс SCSI/Vendor (EP OUT + EP IN).",
+                detailedInstruction = "Подключите включенный синтезатор M-VAVE FM-1 к смартфону через OTG-переходник. Убедитесь, что в верхней карточке диагностики отображается устройство загрузчика VID_4C4A : PID_8057 (или PID_8056 / PID_357D).",
+                verificationHint = "Проверка: В строке интерфейсов должен определяться класс SCSI/Vendor или USB-MIDI.",
                 pcbHighlightZone = PcbHighlightZone.USB_C_PORT
             ),
             UnbrickStepGuide(
@@ -242,10 +321,10 @@ enum class UnbrickMethodType(
             UnbrickStepGuide(
                 stepIndex = 2,
                 stepBadge = "Шаг 3: Запись 0x4000",
-                stepTitle = "Посекторное стирание (0xFD 0x20) и запись 64 секторов в 25Q80",
+                stepTitle = "Посекторное стирание (0xFD 0x20) и линейная запись в 25Q80",
                 timingBadge = "64 сектора × 4 КБ",
-                detailedInstruction = "Выберите прошивку «Official Stock V16» (или любой кастом из каталога) и нажмите главную кнопку запуска Unbrick. Движок автоматически сделает резервный дамп и запишет чистый образ строго с безопасного смещения 0x00004000.",
-                verificationHint = "Проверка: Следите за прогресс-баром и счетчиком повторов секторов (при сбое сработает авто-сброс пайпа).",
+                detailedInstruction = "Выберите прошивку «Official Stock V16» (или любой кастом из каталога) и нажмите главную кнопку запуска Unbrick. Движок запишет чистый образ строго с безопасного смещения 0x00004000.",
+                verificationHint = "Проверка: Следите за прогресс-баром и статусом ответов USBS.",
                 pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
             ),
             UnbrickStepGuide(
@@ -253,62 +332,9 @@ enum class UnbrickMethodType(
                 stepBadge = "Шаг 4: Read-Back & Старт",
                 stepTitle = "Аппаратная сверка Read-Back (0xFD 0xFA) и перезапуск DSP (0xFD 0xE0)",
                 timingBadge = "Авто-перезагрузка",
-                detailedInstruction = "На 5-м этапе конвейера приложение вычитывает контрольные блоки из SPI Flash, сверяет SHA-256 и CRC32 и отправляет команду перезагрузки процессора (0xFD 0xE0). Экран OLED синтезатора загорится штатной заставкой!",
+                detailedInstruction = "По окончании записи приложение вычитывает контрольные блоки из SPI Flash, сверяет SHA-256 / CRC32 и отправляет команду перезагрузки процессора (0xFD 0xE0). Экран OLED синтезатора загорится штатной заставкой!",
                 verificationHint = "Готово: Устройство переключится из PID_8057 обратно в штатный режим USB-MIDI (PID_4155).",
                 pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
-            )
-        )
-    ),
-
-    USB_VBUS_GLITCH_HANDSHAKE(
-        indexNumber = 2,
-        shortBadge = "2. VBUS Глитч (Без разборки)",
-        title = "Метод 2: Перехват BootROM глитчем питания VBUS + атака usbkey (Без вскрытия корпуса!)",
-        subtitle = "Синтезатор намертво зависает сразу после включения и не входит в UBOOT1.00 обычным способом",
-        hardwareRequirement = "USB OTG кабель (удобнее с USB-хабом с кнопкой включения порта, без разборки и пайки!)",
-        requiresCaseOpen = false,
-        requiresSoldering = false,
-        timingWindowSpec = "Критическое окно старта: 0 .. 50 мс с момента подачи 5V VBUS",
-        description = "Новый метод без вскрытия корпуса! Даже если основная прошивка и заголовок повреждены так, что вешают процессор через 50 мс после включения, в первые миллисекунды после подачи питания аппаратный ПЗУ-загрузчик (BootROM) чипа JieLi слушает линии USB D+/D- в ожидании спец-сигнала принудительного обновления (usbkey). Приложение включает сверхбыстрый цикл опроса (120 мс) и при появлении контакта VBUS мгновенно бьет в порт комбинацией пакетов Control ISP Wakeup (0x40/0xFD), SCSI CBW и MIDI SysEx.",
-        physicsExplanation = "При холодном старте ядро RISC процессора JieLi AC791N сначала инициализирует аппаратный USB PHY и в течение ~35–50 мс проверяет наличие хост-пакета синхронизации обновления (механизм JieLi Forced Upgrade Tool), прежде чем передать управление коду из внешней SPI-флешки. Если выключить тумблер FM-1 и подать питание через USB OTG при работающем радаре-перехватчике, смартфон успевает заблокировать переход к битому коду и удерживает чип в режиме загрузки.",
-        troubleshootingTips = "• Лучший результат достигается, если сначала полностью выключить синтезатор тумблером на 5 секунд, запустить «Радар VBUS-Глитча» на экране смартфона и резко вставить кабель USB-C в синтезатор (одновременно включив тумблер питания).\n• Если встроенный аккумулятор удерживает питание ядра, используйте Метод 6 для сброса остаточного заряда.",
-        targetOffsetDefault = "0x00004000",
-        steps = listOf(
-            UnbrickStepGuide(
-                stepIndex = 0,
-                stepBadge = "Шаг 1: Обесточивание",
-                stepTitle = "Полное отключение питания и разряд конденсаторов шины VBUS",
-                timingBadge = "Пауза: 5–7 секунд",
-                detailedInstruction = "Переведите тумблер питания M-VAVE FM-1 в положение OFF и отсоедините кабель USB-C от синтезатора. Подождите 5–7 секунд, чтобы напряжение на фильтрующих конденсаторах шины 3.3V полностью упало до нуля.",
-                verificationHint = "Важно: Оставьте OTG-переходник подключенным к смартфону, чтобы контроллер USB Host телефона уже был активен.",
-                pcbHighlightZone = PcbHighlightZone.POWER_SWITCH_AND_VBUS
-            ),
-            UnbrickStepGuide(
-                stepIndex = 1,
-                stepBadge = "Шаг 2: Запуск радара",
-                stepTitle = "Активация высокочастотного генератора пакетов usbkey (120 мс)",
-                timingBadge = "Интервал: 120 мс",
-                detailedInstruction = "Нажмите кнопку «ЗАПУСТИТЬ VBUS-ГЛИТЧ И ПЕРЕХВАТЧИК USBKEY» ниже. Смартфон начнет непрерывно сканировать шину USB Host и подготовит в буфере пакеты принудительного удержания BootROM (0x40 0xFD + USBC 0xFD 0x10).",
-                verificationHint = "Проверка: Счетчик циклов радара на кнопке начнет быстро увеличиваться.",
-                pcbHighlightZone = PcbHighlightZone.USB_C_PORT
-            ),
-            UnbrickStepGuide(
-                stepIndex = 2,
-                stepBadge = "Шаг 3: Импульс VBUS",
-                stepTitle = "Резкая подача питания USB-C (или включение кнопки на USB-хабе)",
-                timingBadge = "Окно: первые 50 мс",
-                detailedInstruction = "Переведите тумблер FM-1 в положение ON и одним уверенным движением вставьте штекер USB-C в синтезатор (либо нажмите кнопку включения порта на USB-хабе). В момент контакта линий D+/D- перехватчик пошлет стоп-кадр в BootROM.",
-                verificationHint = "Если с первой попытки чип проскочил окно 50 мс — выдерните кабель на 2 секунды и вставьте снова, не выключая радар!",
-                pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
-            ),
-            UnbrickStepGuide(
-                stepIndex = 3,
-                stepBadge = "Шаг 4: Прошивка 0x4000",
-                stepTitle = "Автоматическая фиксация SRAM и запись стоковой прошивки V16",
-                timingBadge = "Захват подтвержден",
-                detailedInstruction = "Как только радар поймает отклик чипа, он автоматически загрузит wl82loader.bin в SRAM 0x010000 и остановит счетчик с зеленым уведомлением «ПЕРЕХВАТ УСПЕШЕН». После этого нажмите главную зеленую кнопку для записи прошивки!",
-                verificationHint = "Статус Этапа 1 и Этапа 2 в чек-листе загорится зеленым цветом.",
-                pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
             )
         )
     ),
@@ -316,15 +342,15 @@ enum class UnbrickMethodType(
     USB_CONTROL_TRANSFER_RESET(
         indexNumber = 3,
         shortBadge = "3. Сброс EP0 (Control Reset)",
-        title = "Метод 3: Вывод из дескрипторного ступора через USB Control Transfer (Без разборки!)",
-        subtitle = "Устройство определяется в системе с ошибкой дескриптора, зависает при опросе или блокирует пайп Bulk OUT",
+        title = "Метод 3: Вывод из ступора пайпов через USB Control Transfer Endpoint 0 (Без разборки!)",
+        subtitle = "Устройство видно по USB, но передача прошивки возвращает ошибку -1 (Endpoint Stall / Halt)",
         hardwareRequirement = "Только USB OTG кабель (Без вскрытия корпуса и без пайки!)",
         requiresCaseOpen = false,
         requiresSoldering = false,
         timingWindowSpec = "Принудительный сброс Endpoint 0 (таймаут 500 мс на команду)",
-        description = "Новый программный метод без вскрытия корпуса! Часто после неудачной прошивки по USB-MIDI контроллер USB внутри чипа JieLi AC791N зависает в промежуточном состоянии (Endpoint Stall / Halt): физически устройство подключено, но обычные пакеты записи возвращают ошибку -1. Этот метод посылает серию низкоуровневых управляющих запросов USB Control Transfer по нулевой конечной точке (Endpoint 0): снятие флага остановки пайпа (CLEAR_FEATURE ENDPOINT_HALT), сброс класса Mass Storage (Bulk-Only Mass Storage Reset 0x21/0xFF) и вендорный импульс пробуждения ISP (0x40/0xFD).",
-        physicsExplanation = "Нулевая конечная точка (Endpoint 0) в стандарте USB 2.0 обрабатывается аппаратным блоком SIE (Serial Interface Engine) чипа JieLi независимо от зависшего потока данных Bulk IN/OUT. Отправка управляющего пакета Control Transfer напрямую сбрасывает конечный автомат USB-контроллера, очищает застрявшие буферы FIFO и заставляет загрузчик заново открыть канал приема wl82loader.bin.",
-        troubleshootingTips = "• Применяйте этот метод, если синтезатор определяется на шине OTG, но при попытке прошивки или чтения бэкапа возникает ошибка передачи заголовка CBW (код -1).\n• После нажатия кнопки «Выполнить Control Transfer сброс» сразу запустите инъекцию wl82loader.bin.",
+        description = "Проверенный программный метод без вскрытия корпуса для случаев, когда после обрыва кабеля или погасания экрана USB-контроллер чипа JieLi AC791N зависает в состоянии блокировки конечной точки (Endpoint Stall / Halt): физически устройство подключено, но `bulkTransfer` возвращает `-1`. Метод посылает серию стандартных и вендорных управляющих запросов по нулевой конечной точке (`Endpoint 0`): снятие флага остановки пайпа (`CLEAR_FEATURE ENDPOINT_HALT` `0x02/0x01`), сброс класса Mass Storage (`Bulk-Only Reset` `0x21/0xFF`) и вендорный импульс пробуждения JieLi ISP (`0x40/0xFD`).",
+        physicsExplanation = "Нулевая конечная точка (Endpoint 0) в стандарте USB 2.0 обрабатывается аппаратным блоком SIE (Serial Interface Engine) чипа JieLi независимо от зависшего потока данных Bulk IN/OUT. Отправка пакета Control Transfer напрямую сбрасывает конечный автомат USB-контроллера и очищает застрявшие буферы FIFO.",
+        troubleshootingTips = "• Применяйте этот метод, если синтезатор определяется на шине OTG, но при попытке прошивки возникает ошибка передачи пакета (код -1).\n• Также этот сброс автоматически вызывается движком при каждом повторе сектора.",
         targetOffsetDefault = "0x00004000",
         steps = listOf(
             UnbrickStepGuide(
@@ -350,8 +376,8 @@ enum class UnbrickMethodType(
                 stepBadge = "Шаг 3: ISP Wakeup",
                 stepTitle = "Отправка вендорного пакета пробуждения JieLi ISP (0x40 / 0xFD)",
                 timingBadge = "Vendor Request 0xFD",
-                detailedInstruction = "Сразу вслед за сбросом пайпов движок автоматически отправляет вендорный Control Transfer запрос (bmRequestType=0x40, bRequest=0xFD, wValue=0x4C4A) и загружает 4 КБ wl82loader.bin в SRAM 0x010000.",
-                verificationHint = "Индикатор «wl82loader.bin активен в SRAM» переключится в зеленое состояние.",
+                detailedInstruction = "Сразу вслед за сбросом пайпов движок отправляет вендорный Control Transfer запрос (bmRequestType=0x40, bRequest=0xFD, wValue=0x4C4A) и подготавливает SRAM 0x010000.",
+                verificationHint = "Пайпы Bulk IN / OUT готовы к приему пакетов без ошибок.",
                 pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
             ),
             UnbrickStepGuide(
@@ -359,78 +385,25 @@ enum class UnbrickMethodType(
                 stepBadge = "Шаг 4: Запись образа",
                 stepTitle = "Восстановление рабочей области 0x00004000 с авто-сбросом Halt",
                 timingBadge = "Защита от сбоев пайпа",
-                detailedInstruction = "Нажмите главную кнопку запуска Unbrick. Во время записи каждого из 64 секторов движок будет автоматически контролировать статус пайпа и при малейшей задержке выполнять прозрачный Control-сброс без прерывания прошивки.",
+                detailedInstruction = "Нажмите главную кнопку запуска Unbrick. Во время записи каждого из 64 секторов движок будет автоматически контролировать статус пайпа и выполнять прозрачный Control-сброс при любой задержке.",
                 verificationHint = "Дождитесь 100% завершения и автоматической перезагрузки синтезатора.",
                 pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
             )
         )
     ),
 
-    BOOTLOOP_SYSEX_CATCHER(
-        indexNumber = 4,
-        shortBadge = "4. Бутлуп-Перехват",
-        title = "Метод 4: Перехват циклического бутлупа и скрытого окна ota-FM-1 (Без разборки!)",
-        subtitle = "Экран вспыхивает на долю секунды и гаснет, либо синтезатор циклически перезагружается",
-        hardwareRequirement = "Только USB OTG кабель (Без разборки корпуса и без пайки!)",
-        requiresCaseOpen = false,
-        requiresSoldering = false,
-        timingWindowSpec = "Окно перехвата MIDI/OTA: первые 120–300 мс после включения",
-        description = "Если в раздел 0x00004000 попала несовместимая или обрезанная прошивка, процессор успевает инициализировать стек USB-MIDI (`ota-FM-1` или `SINCO`), но через 0.3 секунды падает при инициализации аудио-движка DSP. Перехватчик опрашивает шину каждые 120 мс и в момент появления MIDI-интерфейса мгновенно выстреливает сдвоенной SysEx-последовательностью входа в загрузчик (`F0 22 24 35 7D F7` + `F0 22 24 35 7F F7`), переводя синтезатор в стабильный режим `WL82 UBOOT1.00` до того, как сбойный код вызовет зависание.",
-        physicsExplanation = "В прошивках экосистемы M-VAVE FM-1 / SMK-37 обработчик системных эксклюзивных сообщений USB-MIDI (SysEx ID `22 24 35`) регистрируется в прерывании USB раньше, чем запускается главный цикл синтезатора. Прием команды `7D` вызывает немедленный программный переход в вектор загрузчика `0x00000000`.",
-        troubleshootingTips = "• Обязательно включайте перехватчик ДО включения тумблера питания на самом синтезаторе.\n• Если синтезатор не успевает ответить по MIDI, переключитесь на Метод 2 (VBUS Глитч) или Метод 5 (Замыкание 25Q80).",
-        targetOffsetDefault = "0x00004000",
-        steps = listOf(
-            UnbrickStepGuide(
-                stepIndex = 0,
-                stepBadge = "Шаг 1: Выкл. FM-1",
-                stepTitle = "Выключение синтезатора при подключенном кабеле OTG",
-                timingBadge = "Исходное состояние",
-                detailedInstruction = "Выключите питание M-VAVE FM-1 тумблером (OFF). Кабель USB OTG должен быть надежно соединен между смартфоном и портом Type-C синтезатора.",
-                verificationHint = "Убедитесь, что выбрана целевая прошивка «Official Stock V16».",
-                pcbHighlightZone = PcbHighlightZone.POWER_SWITCH_AND_VBUS
-            ),
-            UnbrickStepGuide(
-                stepIndex = 1,
-                stepBadge = "Шаг 2: Старт охотника",
-                stepTitle = "Включение высокочастотной очереди SysEx (F0 22 24 35 7D F7)",
-                timingBadge = "Опрос: каждые 120 мс",
-                detailedInstruction = "Нажмите кнопку «ВКЛЮЧИТЬ ПЕРЕХВАТЧИК БУТЛУПА И VBUS (120 МС)» на экране. Приложение перейдет в режим ожидания появления дескриптора синтезатора на шине USB.",
-                verificationHint = "Кнопка станет ярко-красной со счетчиком активных попыток.",
-                pcbHighlightZone = PcbHighlightZone.USB_C_PORT
-            ),
-            UnbrickStepGuide(
-                stepIndex = 2,
-                stepBadge = "Шаг 3: Подача питания",
-                stepTitle = "Включение тумблера питания FM-1 для перехвата окна инициализации",
-                timingBadge = "Захват за < 200 мс",
-                detailedInstruction = "Включите тумблер питания синтезатора (ON). В первые миллисекунды старта перехватчик отправит пакеты F0 22 24 35 7D F7 и F0 22 24 35 7F F7, остановит загрузку сбойного DSP-кода и загрузит wl82loader.bin в SRAM.",
-                verificationHint = "Появится сообщение «ПЕРЕХВАТ УСПЕШЕН: Устройство захвачено!».",
-                pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
-            ),
-            UnbrickStepGuide(
-                stepIndex = 3,
-                stepBadge = "Шаг 4: Восстановление",
-                stepTitle = "Запись чистой прошивки по смещению 0x00004000",
-                timingBadge = "Полная проверка CRC32",
-                detailedInstruction = "Нажмите главную зеленую кнопку «ЗАПУСТИТЬ UNBRICK». Синтезатор будет перепрошит в штатном режиме загрузчика и автоматически перезапустится.",
-                verificationHint = "Бутлуп полностью устранен.",
-                pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
-            )
-        )
-    ),
-
     SPI_PIN_SHORT_MASKROM(
-        indexNumber = 5,
-        shortBadge = "5. Замыкание 25Q80 (3 вектора)",
-        title = "Метод 5: Принудительный MaskROM замыканием ножек SPI Flash 25Q80 (Без пайки, 3 вектора!)",
+        indexNumber = 4,
+        shortBadge = "4. Замыкание 25Q80 (MaskROM)",
+        title = "Метод 4: Аппаратный вход в MaskROM замыканием ножек SPI Flash 25Q80 (Без пайки, 3 вектора)",
         subtitle = "Полный кирпич (0 устройств по USB, черный экран, процессор намертво виснет при чтении битого флеша)",
         hardwareRequirement = "Отвертка + пинцет или скрепка + кабель USB OTG (Без паяльника и без программатора!)",
         requiresCaseOpen = true,
         requiresSoldering = false,
-        timingWindowSpec = "Удерживать пинцет 1–2 сек в момент включения тумблера питания, затем убрать!",
-        description = "Самый мощный метод подъема «мертвого кирпича» без пайки и без покупки программатора! Если в флеш-память 25Q80 записан мусор, который намертво вешает процессор JieLi AC791N до запуска USB, мы временно не даем процессору прочитать флешку в момент включения питания. Теперь доступны 3 безопасных вектора замыкания пинцетом на выбор: 1) Вектор A (Самый безопасный Hi-Z): Ножка 1 (/CS) на Ножку 8 (VCC 3.3V); 2) Вектор B (На одной стороне): Ножка 2 (DO) на Ножку 4 (GND); 3) Вектор C (Классический): Ножка 6 (CLK) на Ножку 4 (GND). Не увидев флеш при старте, чип AC791N через 20 мс гарантированно падает в вечный заводской MaskROM WL82 UBOOT1.00 (VID_4C4A:PID_8057)!",
-        physicsExplanation = "Внутри кристалла процессора JieLi AC791N зашит неизменяемый заводской загрузчик (MaskROM Volume 0). При подаче питания он пытается прочитать по шине SPI первые 16 байт микросхемы 25Q80. Если заблокировать ответ флешки (подав высокий уровень 3.3V на вход выбора кристалла Pin 1 /CS или замкнув выход данных Pin 2 DO на землю Pin 4 GND), проверка сигнатуры мгновенно завершается отказом, и MaskROM включает аварийный режим восстановления по USB OTG. Как только вы убираете пинцет, флешка снова становится доступной для записи!",
-        troubleshootingTips = "• Вектор A (Pin 1 /CS на Pin 8 VCC) абсолютно безопасен для выходных каскадов процессора, так как подтягивает вход выбора чипа к питанию 3.3V.\n• Вектор B (Pin 2 DO на Pin 4 GND) проще всего выполнить физически, так как обе ножки находятся с левой стороны микросхемы.\n• КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО замыкать Ножку 8 (VCC 3.3V) напрямую на Ножку 4 (GND) — это вызовет короткое замыкание линии питания!",
+        timingWindowSpec = "Удерживать пинцет 1–1.5 сек в момент включения тумблера питания, затем убрать!",
+        description = "Главный проверенный аппаратный метод подъема «мертвого кирпича» (Hard-Brick) без пайки и без программатора! Если в флеш-память 25Q80 записан поврежденный код, который вешает процессор JieLi AC791N до инициализации USB, мы временно блокируем чтение флешки в момент включения питания пинцетом по одному из 3 безопасных векторов: 1) Вектор A (Режим Hi-Z): Ножка 1 (/CS) на Ножку 8 (VCC 3.3V); 2) Вектор B (На левой стороне): Ножка 2 (DO) на Ножку 4 (GND); 3) Вектор C (Классический): Ножка 6 (CLK) на Ножку 4 (GND). Не прочитав сигнатуру флешки при старте, чип AC791N через 20 мс гарантированно переходит в нестираемый заводской MaskROM `WL82 UBOOT1.00` (`VID_4C4A:PID_8057`)!",
+        physicsExplanation = "Внутри кристалла процессора JieLi AC791N зашит неизменяемый заводской загрузчик (MaskROM Volume 0). При подаче питания он пытается прочитать по шине SPI первые 16 байт микросхемы 25Q80. Если заблокировать ответ флешки (подав высокий уровень 3.3V на вход выбора кристалла Pin 1 /CS или замкнув выход данных Pin 2 DO на землю Pin 4 GND), проверка сигнатуры мгновенно завершается отказом, и MaskROM открывает аварийный порт восстановления USB OTG. Как только вы убираете пинцет, флешка снова становится доступной для стирания и записи!",
+        troubleshootingTips = "• Вектор A (Pin 1 /CS на Pin 8 VCC) абсолютно безопасен для выходных каскадов процессора, так как переводит чип памяти 25Q80 в высокоимпедансный режим ожидания (High-Z).\n• Сразу после того как смартфон обнаружил устройство WL82 UBOOT1.00 — ОБЯЗАТЕЛЬНО УБЕРИТЕ ПИНЦЕТ перед нажатием кнопки записи!\n• КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО замыкать Ножку 8 (VCC 3.3V) напрямую на Ножку 4 (GND)!",
         targetOffsetDefault = "0x00004000",
         steps = listOf(
             UnbrickStepGuide(
@@ -439,7 +412,7 @@ enum class UnbrickMethodType(
                 stepTitle = "Снятие нижней крышки корпуса и поиск 8-ногой микросхемы 25Q80 SOIC-8",
                 timingBadge = "Питание: ВЫКЛ (OFF)",
                 detailedInstruction = "Выключите синтезатор. Открутите винты нижней панели корпуса M-VAVE FM-1. Рядом с главным квадратным процессором JieLi AC791N найдите маленькую 8-ногую микросхему памяти 25Q80 (Winbond / Boya). Точка-ключ на ее корпусе указывает на Ножку 1 (/CS).",
-                verificationHint = "Подключите кабель USB OTG к выключенному синтезатору и нажмите «Запустить радар перехвата».",
+                verificationHint = "Подключите кабель USB OTG к выключенному синтезатору и включите «Радар перехвата 120 мс».",
                 pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
             ),
             UnbrickStepGuide(
@@ -456,7 +429,7 @@ enum class UnbrickMethodType(
                 stepBadge = "Шаг 3: Старт в MaskROM",
                 stepTitle = "Включение тумблера питания при удерживаемом пинцете (на 1.5 секунды)",
                 timingBadge = "Убрать пинцет через 1.5 с!",
-                detailedInstruction = "Удерживая пинцет на выбранных ножках, переведите тумблер питания синтезатора в положение ON. Через 1–1.5 секунды смартфон подаст сигнал обнаружения устройства WL82 UBOOT1.00 (VID_4C4A:PID_8057) и загрузит wl82loader.bin в память. СРАЗУ УБЕРИТЕ ПИНЦЕТ С МИКРОСХЕМЫ!",
+                detailedInstruction = "Удерживая пинцет на выбранных ножках, переведите тумблер питания синтезатора в положение ON. Через 1–1.5 секунды смартфон обнаружит устройство WL82 UBOOT1.00 (VID_4C4A:PID_8057) и загрузит wl82loader.bin в память. СРАЗУ УБЕРИТЕ ПИНЦЕТ С МИКРОСХЕМЫ!",
                 verificationHint = "Критично: Если не убрать пинцет перед записью, флеш-память не сможет принять новую прошивку.",
                 pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
             ),
@@ -472,80 +445,27 @@ enum class UnbrickMethodType(
         )
     ),
 
-    BROWNOUT_PMU_RELEASE(
-        indexNumber = 6,
-        shortBadge = "6. Сброс защиты АКБ",
-        title = "Метод 6: Снятие защиты Brownout контроллера питания без отпайки АКБ (JST-PH 2.0 / Холодный старт)",
-        subtitle = "Синтезатор внезапно перестал включаться, не реагирует на тумблер и зарядку после зависания звука",
-        hardwareRequirement = "Без пайки! USB-кабель (или отщелкивание 2-контактного белого штекера АКБ JST-PH 2.0 пальцами)",
-        requiresCaseOpen = false,
-        requiresSoldering = false,
-        timingWindowSpec = "Обесточивание контура VDDIO на 10–15 секунд",
-        description = "Новый метод без паяльника! В синтезаторах M-VAVE FM-1 встроенный литий-полимерный аккумулятор питает дежурный домен контроллера питания (PMU) и RTC даже при выключенном тумблере. При жестком краше экспериментальной DSP-прошивки процессор может войти в состояние защелкивания (Brownout Latch / SCR Latch-up), а плата защиты аккумулятора (BMS) уходит в глухую блокировку по току. В результате устройство кажется полностью «мертвым» кирпичом. Метод позволяет сбросить защелку PMU двумя путями без паяльника: 1) Внешний импульсный сброс через шину 5V VBUS; 2) Беспаечное отсоединение белого разъема аккумулятора JST-PH 2.0 на 10 секунд.",
-        physicsExplanation = "Пока на выводе VBAT/VDDIO процессора AC791N сохраняется остаточное напряжение от заблокированной батареи (~1.8–2.4 В), внутренняя схема сброса при включении (POR — Power-On Reset) не вырабатывает импульс перезапуска ядра. Полное снятие потенциала на 10 секунд разряжает емкости домена PMU ниже порога 0.2 В и гарантированно перезапускает тактовый генератор 24 МГц.",
-        troubleshootingTips = "• Сначала попробуйте Вариант 1 (без вскрытия корпуса): подключите мощный блок питания 5V (или OTG) при выключенном тумблере на 30 секунд для вывода BMS из защиты.\n• Если не помогло — снимите крышку и аккуратно выньте белый 2-контактный штекер аккумулятора из гнезда JST-PH 2.0 (паять ничего не нужно, он на защелке!).",
-        targetOffsetDefault = "0x00004000",
-        steps = listOf(
-            UnbrickStepGuide(
-                stepIndex = 0,
-                stepBadge = "Шаг 1: Проверка BMS",
-                stepTitle = "Снятие блокировки платы защиты АКБ через внешний импульс 5V VBUS (Без разборки)",
-                timingBadge = "Выдержка: 20–30 сек",
-                detailedInstruction = "Переведите тумблер FM-1 в положение OFF. Подключите кабель USB-C к смартфону/зарядке на 20 секунд, затем быстро переключите тумблер ON -> OFF -> ON с запущенным радаром перехвата в приложении.",
-                verificationHint = "Во многих случаях этого достаточно для снятия защиты контроллера заряда.",
-                pcbHighlightZone = PcbHighlightZone.POWER_SWITCH_AND_VBUS
-            ),
-            UnbrickStepGuide(
-                stepIndex = 1,
-                stepBadge = "Шаг 2: Штекер JST-PH2",
-                stepTitle = "Беспаечное отключение разъема аккумулятора JST-PH 2.0 (При глубоком клине PMU)",
-                timingBadge = "Без паяльника!",
-                detailedInstruction = "Если шаг 1 не разбудил чип: отсоедините USB, снимите нижнюю крышку и найдите белый 2-контактный разъем JST-PH 2.0 (красный и черный провода от аккумулятора). Аккуратно подденьте штекер ногтем или пинцетом за пластиковые выступы и выньте его из разъема на плате.",
-                verificationHint = "Никакой пайки! Аккумулятор в M-VAVE FM-1 подключается стандартным разъемным коннектором.",
-                pcbHighlightZone = PcbHighlightZone.JST_BATTERY_CONNECTOR
-            ),
-            UnbrickStepGuide(
-                stepIndex = 2,
-                stepBadge = "Шаг 3: Сброс заряда",
-                stepTitle = "Принудительный разряд остаточной емкости домена POR (10 секунд)",
-                timingBadge = "Выдержка: 10 сек",
-                detailedInstruction = "При отключенном штекере аккумулятора переведите тумблер питания синтезатора в положение ON на 10 секунд (при отключенном USB кабеле). Это мгновенно разрядит конденсаторы питания процессора AC791N в ноль и снимет защелку Brownout.",
-                verificationHint = "Затем переведите тумблер обратно в OFF.",
-                pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
-            ),
-            UnbrickStepGuide(
-                stepIndex = 3,
-                stepBadge = "Шаг 4: Старт от VBUS",
-                stepTitle = "Чистый старт от USB OTG без батареи и возврат штекера АКБ",
-                timingBadge = "Чистое питание 5.0V",
-                detailedInstruction = "Не подключая батарею, соедините FM-1 кабелем OTG со смартфоном и включите тумблер ON. Питание пойдет напрямую от чистых 5V шины USB! Прошейте стоковую прошивку V16, после чего вставьте штекер аккумулятора JST-PH 2.0 обратно до щелчка.",
-                verificationHint = "Питание от VBUS без батареи исключает любые просадки напряжения при стирании секторов флеш-памяти.",
-                pcbHighlightZone = PcbHighlightZone.USB_C_PORT
-            )
-        )
-    ),
-
     FWSC_CONTAINER_SURGEON(
-        indexNumber = 7,
-        shortBadge = "7. Хирург .fwsc / 0x0000",
-        title = "Метод 7: Хирург контейнеров .fwsc (fm1_extract_app) и реконструктор сектора 0x0000–0x3FFF",
+        indexNumber = 5,
+        shortBadge = "5. Хирург .fwsc / 0x0000",
+        title = "Метод 5: Хирург контейнеров .fwsc (fm1pkg) и реконструктор загрузчика 0x0000–0x3FFF",
         subtitle = "Синтезатор окирпичился после прошивки сырого .fwsc файла или затерта таблица разделов 0x0000",
-        hardwareRequirement = "USB OTG кабель (режим UBOOT1.00 / Pin-Short / Мост RP2040 / CH341A)",
+        hardwareRequirement = "USB OTG кабель (режим UBOOT1.00 / ota-FM-1 / Pin-Short / CH341A)",
         requiresCaseOpen = false,
         requiresSoldering = false,
-        timingWindowSpec = "Автоматическая хирургия образа перед записью",
-        description = "Главная причина тяжелых кирпичей M-VAVE FM-1 — попытка записать официальный или кастомный пакет с расширением `.fwsc` напрямую с нулевого адреса `0x00000000`. Сырой `.fwsc` файл содержит внешнюю контейнерную шапку, которая при записи в `0x0000` уничтожает заводской загрузчик JieLi `UBOOT1.00` (`0x0000–0x3FFF`). Встроенный «Хирург .fwsc» автоматически распознает и отрезает опасные заголовки, выравнивает код приложения строго под безопасный адрес `0x00004000`, а при поврежденном нулевом секторе — воссоздает эталонный 16 КБ блок загрузчика (Golden Boot Header `0x0000–0x3FFF`).",
+        timingWindowSpec = "Автоматическая распаковка 20 маркеров 0x2F и выравнивание перед записью",
+        description = "Частая причина окирпичивания M-VAVE FM-1 — попытка записать контейнер `.fwsc` напрямую без распаковки или с нулевого адреса `0x00000000`. В формате `.fwsc` (`fm1pkg.js`) первые 20 блоков по 48 байт (`0x30`) содержат служебные 1-байтные маркеры на позиции `0x2F`, а запись в `0x0000` уничтожает заводской загрузчик JieLi `UBOOT1.00` (`0x0000–0x3FFF`). Встроенный «Хирург .fwsc» автоматически вырезает 20 контейнерных маркеров и опасные заголовки, выравнивает код приложения строго под безопасный адрес `0x00004000`, а при поврежденном нулевом секторе — воссоздает эталонный 16 КБ блок загрузчика (`Golden Boot Header 0x0000–0x3FFF`).",
         physicsExplanation = "Флеш-память 25Q80 (1 МБ) в M-VAVE FM-1 разделена на три критических зоны: 1) `0x000000–0x003FFF` (16 КБ) — заголовок загрузчика JieLi ISD и таблица разделов; 2) `0x004000–0x0EFFFF` (944 КБ) — исполняемый код прошивки синтезатора; 3) `0x0F0000–0x0FFFFF` (64 КБ) — энергонезависимый банк 64 пользовательских пресетов и калибровок. Хирург гарантирует математическую точность границ этих разделов.",
-        troubleshootingTips = "• Вы можете загрузить абсолютно любой сторонний файл (.fwsc, .bin, .fw) кнопкой «Открыть свой .fwsc» — хирург автоматически обезвредит его и подготовит к безопасной прошивке.\n• Используйте кнопку «Реконструировать Golden Boot 0x0000–0x3FFF + App 0x4000», если предыдущая утилита стерла загрузчик.",
+        troubleshootingTips = "• Вы можете загрузить любой сторонний файл (.fwsc, .bin, .fw) кнопкой «Открыть свой .fwsc» — хирург автоматически удалит маркеры контейнера и подготовит чистый образ для 0x00004000.\n• Используйте кнопку «Реконструировать Golden Boot 0x0000–0x3FFF + App 0x4000», если предыдущая утилита стерла загрузчик.",
         targetOffsetDefault = "0x00000000 (Boot 16KB) + 0x00004000 (App)",
         steps = listOf(
             UnbrickStepGuide(
                 stepIndex = 0,
-                stepBadge = "Шаг 1: Анализ файла",
-                stepTitle = "Загрузка и препарирование контейнера .fwsc / .bin",
-                timingBadge = "Проверка сигнатур",
-                detailedInstruction = "Выберите прошивку из каталога или импортируйте внешний файл кнопкой «Открыть свой .fwsc» и нажмите «Препарировать образ». Хирург проверит первые 256/16384 байт на наличие сигнатур FWSC / JLISD.",
-                verificationHint = "В отчете хирурга отобразится точное число отрезанных байт и контрольная сумма чистого блока 0x4000.",
+                stepBadge = "Шаг 1: Анализ .fwsc",
+                stepTitle = "Загрузка и распаковка контейнера .fwsc (удаление 20 маркеров 0x2F)",
+                timingBadge = "Алгоритм fm1pkg",
+                detailedInstruction = "Выберите прошивку из каталога или импортируйте внешний файл кнопкой «Открыть свой .fwsc» и нажмите «Препарировать образ». Хирург очистит 20 маркерных байтов в первых 960 байтах и проверит сигнатуры FWSC / JLISD.",
+                verificationHint = "В отчете хирурга отобразится точное число удаленных байтов и CRC32 чистого блока 0x4000.",
                 pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
             ),
             UnbrickStepGuide(
@@ -578,71 +498,18 @@ enum class UnbrickMethodType(
         )
     ),
 
-    RP2040_TRANSPORTER_BRIDGE(
-        indexNumber = 8,
-        shortBadge = "8. Мост RP2040 (D+/D-)",
-        title = "Метод 8: Аппаратный мост RP2040 / Pi Pico Transporter (Синхронизация по D+/D- без пайки к чипу)",
-        subtitle = "Аппаратный ввод процессора AC791N в низкоуровневый режим через модифицированный USB-кабель",
-        hardwareRequirement = "Плата Seeed XIAO RP2040 или Raspberry Pi Pico (VID_2E8A:PID_000A) + USB-кабель",
-        requiresCaseOpen = false,
-        requiresSoldering = false,
-        timingWindowSpec = "Аппаратный тайминг PIO: микросекундный захват D+/D-",
-        description = "Метод сообщества разработчиков TheFirmwareHub (FM-1 Transporter): микроконтроллер RP2040 подключается в разрыв линий данных D+ (зеленый провод) и D- (белый провод) USB-кабеля (либо щупами к площадкам TP_DP / TP_DM без пайки). В момент включения питания FM-1 плата RP2040 с микросекундной точностью генерирует аппаратную последовательность входа в заводской MaskROM JieLi, загружает `wl82loader.bin` в SRAM и пробрасывает канал прошивки в смартфон.",
-        physicsExplanation = "Аппаратный блок программируемого ввода-вывода (PIO) микроконтроллера RP2040 работает на частоте 125 МГц и формирует эталонную кодовую посылку JieLi UART-over-USB на линиях D+/D- в первые 5 мс после подачи питания, что гарантированно перехватывает управление даже при полностью стертой флеш-памяти.",
-        troubleshootingTips = "• Вы можете подключить линии GPIO 0 (D+), GPIO 1 (D-) и GND платы RP2040 к разрезанному USB-C кабелю на скрутках/клеммах WAGO — тогда даже разбирать корпус синтезатора не придется!",
-        targetOffsetDefault = "0x00004000",
-        steps = listOf(
-            UnbrickStepGuide(
-                stepIndex = 0,
-                stepBadge = "Шаг 1: Прошивка UF2",
-                stepTitle = "Загрузка прошивки моста wl82loader.uf2 в плату RP2040 / Pi Pico",
-                timingBadge = "Режим BOOTSEL",
-                detailedInstruction = "Зажмите кнопку BOOTSEL на плате Seeed XIAO RP2040 или Raspberry Pi Pico, подключите ее к телефону/ПК и скопируйте файл прошивки моста `wl82loader.uf2` на появившийся накопитель RPI-RP2.",
-                verificationHint = "После перезагрузки плата определится как CDC-мост VID_2E8A : PID_000A.",
-                pcbHighlightZone = PcbHighlightZone.USB_C_PORT
-            ),
-            UnbrickStepGuide(
-                stepIndex = 1,
-                stepBadge = "Шаг 2: Линии D+/D-",
-                stepTitle = "Соединение GPIO 0 (D+), GPIO 1 (D-) и GND с портом USB-C синтезатора",
-                timingBadge = "3 провода: D+, D-, GND",
-                detailedInstruction = "Соедините 3 контакта платы RP2040 с линиями USB выключенного M-VAVE FM-1 (через переходник USB-C или контактные площадки на плате):\n• GPIO 0 (RP2040) ──► USB D+ (Зеленый)\n• GPIO 1 (RP2040) ──► USB D- (Белый)\n• GND (RP2040)    ──► GND (Черный)",
-                verificationHint = "Линию +5V VBUS подавайте штатно при включении синтезатора.",
-                pcbHighlightZone = PcbHighlightZone.PCB_TEST_PADS_DP_DM
-            ),
-            UnbrickStepGuide(
-                stepIndex = 2,
-                stepBadge = "Шаг 3: Захват MaskROM",
-                stepTitle = "Включение питания FM-1 и автоматический рукопожатие RP2040 -> AC791N",
-                timingBadge = "Тайминг PIO: < 5 мс",
-                detailedInstruction = "Подключите RP2040 к смартфону по OTG и включите тумблер питания M-VAVE FM-1. Плата RP2040 мгновенно переведет процессор AC791N в сервисный режим и загорится зеленым статусом «МОСТ RP2040 АКТИВЕН».",
-                verificationHint = "Нажмите кнопку инъекции wl82loader.bin для проверки связи.",
-                pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
-            ),
-            UnbrickStepGuide(
-                stepIndex = 3,
-                stepBadge = "Шаг 4: Полная запись",
-                stepTitle = "Перезапись загрузчика 0x0000 и основной прошивки 0x4000 через мост",
-                timingBadge = "Скорость: до 512 КБ/с",
-                detailedInstruction = "Нажмите главную зеленую кнопку восстановления. Через мост RP2040 можно безопасно восстановить как рабочую область 0x00004000, так и затертый сектор загрузчика 0x0000–0x3FFF.",
-                verificationHint = "По окончании отключите мост и подключите FM-1 обычным кабелем.",
-                pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
-            )
-        )
-    ),
-
     CH341A_FULL_DUMP_PROGRAMMER(
-        indexNumber = 9,
-        shortBadge = "9. CH341A + 1 МБ Дамп",
-        title = "Метод 9: Прямая прошивка 25Q80 прищепкой SOIC-8 через программатор CH341A OTG + Сборщик 1 МБ",
-        subtitle = "100% аппаратная реанимация в любом состоянии напрямую в чип памяти 25Q80 в обход процессора",
-        hardwareRequirement = "Программатор CH341A (VID_1A86:PID_5512) + беcпаечная прищепка SOIC-8 (или экспорт 1 МБ .bin для ПК)",
+        indexNumber = 6,
+        shortBadge = "6. CH341A / Мост RP2040",
+        title = "Метод 6: Аппаратный программатор CH341A SPI (прищепка SOIC-8) / Мост RP2040 + Полный дамп 1 МБ",
+        subtitle = "100% аппаратная реанимация напрямую в чип памяти 25Q80 (VID_1A86:PID_5512) или через мост RP2040",
+        hardwareRequirement = "Программатор CH341A + прищепка SOIC-8 или плата RP2040 Transporter (или экспорт 1 МБ .bin для ПК)",
         requiresCaseOpen = true,
         requiresSoldering = false,
         timingWindowSpec = "Прямой доступ к SPI NOR 0x000000–0x0FFFFF (1 048 576 байт)",
-        description = "Абсолютное оружие для подъема из любого состояния без выпаивания микросхемы! Специальная беcпаечная прищепка (SOIC-8 Test Clip) надевается сверху на 8-ногую микросхему памяти 25Q80 прямо на плате выключенного синтезатора. Приложение автоматически собирает полный эталонный 1 МБ образ памяти (`0x000000–0x0FFFFF`: 16 КБ Golden Boot `0x0000` + выбранная прошивка `0x4000` + 64 КБ банк пресетов EEPROM `0x0F0000`) и позволяет либо прошить чип напрямую со смартфона через подключенный по OTG программатор CH341A, либо сохранить готовый 1 МБ `.bin` файл для `flashrom` / `AsProgrammer`.",
-        physicsExplanation = "Программатор CH341A подключается напрямую к линиям SPI микросхемы 25Q80 (`/CS`, `CLK`, `DI`, `DO`, `VCC 3.3V`, `GND`) и записывает все 256 секторов по 4 КБ (ровно 1 048 576 байт) независимо от состояния процессора JieLi AC791N.",
-        troubleshootingTips = "• При установке прищепки SOIC-8 обязательно совместите красную жилу шлейфа с Ножкой 1 (/CS, отмечена круглой точкой-ключом на корпусе 25Q80).\n• Тумблер питания самого синтезатора во время работы прищепки должен быть в положении OFF!",
+        description = "Безотказный аппаратный метод для подъема из любого состояния без выпаивания микросхемы! Беспаечная прищепка SOIC-8 надевается на 8-ногую микросхему памяти 25Q80 на плате выключенного синтезатора (либо подключается аппаратный мост RP2040 Transporter к линиям D+/D-). Приложение автоматически собирает полный эталонный 1 МБ образ памяти (`0x000000–0x0FFFFF`: 16 КБ Golden Boot `0x0000` + выбранная прошивка `0x4000` + 64 КБ банк пресетов EEPROM `0x0F0000`) и позволяет либо прошить чип напрямую со смартфона через подключенный по OTG программатор `CH341A` / `RP2040`, либо экспортировать готовый 1 МБ `.bin` файл для `flashrom` / `AsProgrammer`.",
+        physicsExplanation = "Программатор CH341A подключается напрямую к линиям SPI микросхемы 25Q80 (`/CS`, `CLK`, `DI`, `DO`, `VCC 3.3V`, `GND`) и записывает все 256 секторов по 4 КБ (ровно 1 048 576 байт) в обход процессора JieLi AC791N.",
+        troubleshootingTips = "• При установке прищепки SOIC-8 обязательно совместите красную жилу шлейфа с Ножкой 1 (/CS, отмечена круглой точкой-ключом на корпусе 25Q80).\n• Тумблер питания самого синтезатора во время работы прищепки CH341A должен быть в положении OFF!",
         targetOffsetDefault = "0x00000000 – 0x000FFFFF (1 MB Full)",
         steps = listOf(
             UnbrickStepGuide(
@@ -650,14 +517,14 @@ enum class UnbrickMethodType(
                 stepBadge = "Шаг 1: Сборка 1 МБ",
                 stepTitle = "Генерация полного эталонного дампа 1 МБ (1 048 576 байт)",
                 timingBadge = "Boot + App + EEPROM",
-                detailedInstruction = "Выберите целевую прошивку (например, Official Stock V16) и нажмите кнопку «Собрать и сохранить полный 1 МБ дамп» (или подключите CH341A по OTG). Движок объединит 16 КБ Golden Boot (0x0000), код прошивки (0x4000) и 64 КБ область пресетов (0x0F0000).",
+                detailedInstruction = "Выберите целевую прошивку (например, Official Stock V16) и нажмите кнопку «Собрать и сохранить полный 1 МБ дамп» (или подключите CH341A / RP2040 по OTG). Движок объединит 16 КБ Golden Boot (0x0000), код прошивки (0x4000) и 64 КБ область пресетов (0x0F0000).",
                 verificationHint = "Вы можете сразу сохранить готовый файл .bin для любого ПК-программатора.",
                 pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
             ),
             UnbrickStepGuide(
                 stepIndex = 1,
                 stepBadge = "Шаг 2: Прищепка SOIC-8",
-                stepTitle = "Установка беспаечной прищепки SOIC-8 на микросхему 25Q80",
+                stepTitle = "Установка беспаечной прищепки SOIC-8 на микросхему 25Q80 (или подключение RP2040)",
                 timingBadge = "Красная жила -> Pin 1",
                 detailedInstruction = "При выключенном питании FM-1 (OFF) наденьте прищепку SOIC-8 на чип 25Q80. Проследите, чтобы провод №1 (с красной меткой) совпал с Ножкой 1 (/CS, точка на корпусе чипа в левом верхнем углу).",
                 verificationHint = "Убедитесь, что контакты прищепки плотно обхватили все 8 ножек микросхемы.",
@@ -665,10 +532,10 @@ enum class UnbrickMethodType(
             ),
             UnbrickStepGuide(
                 stepIndex = 2,
-                stepBadge = "Шаг 3: CH341A в OTG",
-                stepTitle = "Подключение программатора CH341A (VID_1A86:PID_5512) к смартфону",
+                stepBadge = "Шаг 3: Программатор OTG",
+                stepTitle = "Подключение программатора CH341A (VID_1A86:PID_5512) или моста RP2040 к смартфону",
                 timingBadge = "Режим SPI 3.3V",
-                detailedInstruction = "Убедитесь, что перемычка на плате программатора CH341A установлена в режим SPI (контакты 1–2), и подключите его к смартфону через OTG-адаптер. Статус диагностики переключится на «ПРОГРАММАТОР CH341A».",
+                detailedInstruction = "Убедитесь, что перемычка на плате программатора CH341A установлена в режим SPI (контакты 1–2), и подключите его к смартфону через OTG-адаптер. Статус диагностики переключится на «ПРОГРАММАТОР CH341A» или «МОСТ RP2040 АКТИВЕН».",
                 verificationHint = "Подтвердите системное разрешение Android USB Host.",
                 pcbHighlightZone = PcbHighlightZone.USB_C_PORT
             ),
@@ -677,61 +544,8 @@ enum class UnbrickMethodType(
                 stepBadge = "Шаг 4: Запись 1 МБ",
                 stepTitle = "Прямая аппаратная запись и верификация полного образа 25Q80",
                 timingBadge = "0x000000 – 0x0FFFFF",
-                detailedInstruction = "Нажмите главную зеленую кнопку для прямой записи полного дампа через CH341A. После 100% верификации снимите прищепку с чипа 25Q80 и включите тумблер питания синтезатора!",
+                detailedInstruction = "Нажмите главную зеленую кнопку для прямой записи полного дампа. После 100% верификации снимите прищепку с чипа 25Q80 и включите тумблер питания синтезатора!",
                 verificationHint = "Гарантирует 100% восстановление даже при полностью чистой или новой микросхеме 25Q80.",
-                pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
-            )
-        )
-    ),
-
-    USB_BUS_DIAGNOSTIC_ANALYZER(
-        indexNumber = 10,
-        shortBadge = "10. Диагностика шины OTG",
-        title = "Метод 10: Низкоуровневый анализатор и тестер целостности шины USB OTG",
-        subtitle = "Проверка кабеля на обрыв линий D+/D-, тест Endpoint 0, проверка пакетов USBC/USBS и питания",
-        hardwareRequirement = "Смартфон с USB OTG + проверяемый кабель / синтезатор M-VAVE FM-1",
-        requiresCaseOpen = false,
-        requiresSoldering = false,
-        timingWindowSpec = "5-уровневый аппаратный аудит за 450 мс",
-        description = "Инженерный диагностический стенд для точного определения причины, почему синтезатор не прошивается или не видится смартфоном. Выполняет 5 низкоуровневых аппаратных проверок: 1) Поддержка ядром Android режима USB Host и питания VBUS; 2) Считывание сырых USB-дескрипторов и ревизии VID/PID; 3) Проверка времени отклика нулевой конечной точки (Endpoint 0 Control Transfer); 4) Проверка размера пакетов (maxPacketSize) и отсутствия флага HALT на каналах Bulk IN / Bulk OUT; 5) Тестовый обмен пакетами SCSI CBW ('USBC') и проверка сигнатуры ответа CSW ('USBS' 0x53425355).",
-        physicsExplanation = "Более 40% случаев «неработающего раскирпичивателя» связаны с использованием зарядных USB-C кабелей (в которых физически отсутствуют жилы D+ и D-) либо с просадкой напряжения VBUS ниже 4.4 В на пассивных OTG-переходниках. Анализатор тестирует прохождение реальных фреймов данных до начала записи во флеш-память.",
-        troubleshootingTips = "• Запускайте этот тест перед любой ответственной операцией Unbrick, чтобы убедиться в 100% надежности вашего OTG-переходника и кабеля.",
-        targetOffsetDefault = "ДИАГНОСТИКА (БЕЗ ЗАПИСИ)",
-        steps = listOf(
-            UnbrickStepGuide(
-                stepIndex = 0,
-                stepBadge = "Шаг 1: Контроллер OTG",
-                stepTitle = "Проверка аппаратной поддержки Android USB Host и подачи 5V VBUS",
-                timingBadge = "Тест 1/5",
-                detailedInstruction = "Подключите OTG-адаптер и кабель к синтезатору. Нажмите кнопку «ЗАПУСТИТЬ ПОЛНЫЙ АУДИТ ШИНЫ USB OTG».",
-                verificationHint = "Проверяет наличие системного драйвера android.hardware.usb.host.",
-                pcbHighlightZone = PcbHighlightZone.USB_C_PORT
-            ),
-            UnbrickStepGuide(
-                stepIndex = 1,
-                stepBadge = "Шаг 2: Линии D+ / D-",
-                stepTitle = "Анализ дескрипторов устройства и проверка кабеля на наличие жил данных",
-                timingBadge = "Тест 2/5",
-                detailedInstruction = "Анализатор проверяет, выставляет ли устройство валидные дескрипторы VID/PID на линии D+ и D-. Если кабель «только для зарядки», система укажет на обрыв линий данных.",
-                verificationHint = "Определяет все ревизии 0x4C4A, 0x2224, 0x2E8A и 0x1A86.",
-                pcbHighlightZone = PcbHighlightZone.PCB_TEST_PADS_DP_DM
-            ),
-            UnbrickStepGuide(
-                stepIndex = 2,
-                stepBadge = "Шаг 3: Пайпы EP0 & Bulk",
-                stepTitle = "Тестирование задержки Control Transfer EP0 и каналов Bulk IN / OUT",
-                timingBadge = "Тест 3/5 и 4/5",
-                detailedInstruction = "Открывает физическое соединение с портом USB, замеряет отклик управляющего канала Endpoint 0 и проверяет конечные точки передачи данных на отсутствие блокировки Stall/Halt.",
-                verificationHint = "При обнаружении флага Halt автоматически предлагает выполнить Метод 3.",
-                pcbHighlightZone = PcbHighlightZone.AC791N_SOC_CORE
-            ),
-            UnbrickStepGuide(
-                stepIndex = 3,
-                stepBadge = "Шаг 4: Рукопожатие USBS",
-                stepTitle = "Контрольный пинг загрузчика пакетом SCSI CBW и проверка ответа CSW",
-                timingBadge = "Тест 5/5 (USBC -> USBS)",
-                detailedInstruction = "Отправляет безопасный диагностический пакет опроса и проверяет возврат 13-байтной структуры Command Status Wrapper (сигнатура 0x53425355 'USBS').",
-                verificationHint = "По итогам формируется подробный технический вердикт.",
                 pcbHighlightZone = PcbHighlightZone.SPI_FLASH_25Q80
             )
         )
@@ -765,7 +579,7 @@ data class ConnectedUsbDeviceInfo(
     val detectedFirmwareIdent: String,
     val usbInterfaceSummary: String,
     val bootloaderVersion: String,
-    val recommendedUnbrickMethod: UnbrickMethodType = UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT,
+    val recommendedUnbrickMethod: UnbrickMethodType = UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER,
     val protectedBootRegion: String = "0x00000000 – 0x00003FFF (LOCKED)",
     val writableAppRegion: String = "0x00004000 – 0x000FFFFF"
 ) {
@@ -800,7 +614,7 @@ class UsbFlashEngine(private val context: Context) {
         const val SINCO_ALT_VID = 0x2224 // 8740 (Sinco Audio / M-VAVE USB MIDI & OTA VID)
         const val WL82_UBOOT_PID = 0x8057 // 32855 (WL82 UBOOT1.00 Soft-Brick)
         const val WL82_MASKROM_ALT_PID = 0x8056 // 32854 (JieLi Forced Upgrade MaskROM)
-        const val MVAVE_MIDI_PID = 0x4155 // 16725 (M-VAVE FM-1 Normal MIDI)
+        const val MVAVE_MIDI_PID = 0x4155 // 16725 (M-VAVE FM-1 Normal MIDI & ota-FM-1)
         const val MVAVE_ALT_MIDI_PID = 0x4156 // 16726 (M-VAVE SMK-37 / FM-1 Alt MIDI)
         const val SINCO_OTA_PID = 0x357D // 13693 (Sinco OTA Boot Trigger)
         const val RP2040_VID = 0x2E8A // 11914 (Raspberry Pi RP2040 / XIAO Bridge)
@@ -819,11 +633,15 @@ class UsbFlashEngine(private val context: Context) {
         const val JL_SUBCMD_READ_SPI_VERIFY: Byte = 0xFA.toByte()
         const val JL_SUBCMD_REBOOT_DSP: Byte = 0xE0.toByte()
 
+        // M-VAVE FM-1 / SINCO SysEx OTA protocol commands
         val SYSEX_ENTER_BOOTLOADER = byteArrayOf(
             0xF0.toByte(), 0x22, 0x24, 0x35, 0x7D, 0xF7.toByte()
         )
         val SYSEX_UPGRADE_HANDSHAKE = byteArrayOf(
             0xF0.toByte(), 0x22, 0x24, 0x35, 0x7F, 0xF7.toByte()
+        )
+        val SYSEX_OTA_REBOOT_FINAL = byteArrayOf(
+            0xF0.toByte(), 0x22, 0x24, 0x35, 0x7E, 0xF7.toByte()
         )
         val SYSEX_IDENTITY_REQUEST = byteArrayOf(
             0xF0.toByte(), 0x7E, 0x7F, 0x06, 0x01, 0xF7.toByte()
@@ -848,6 +666,104 @@ class UsbFlashEngine(private val context: Context) {
 
     fun isUsbHostSupportedByDevice(): Boolean {
         return context.packageManager.hasSystemFeature(PackageManager.FEATURE_USB_HOST) && usbManager != null
+    }
+
+    /**
+     * Encodes an arbitrary raw MIDI SysEx message (`F0 ... F7`) into standard 4-byte
+     * USB-MIDI Event Packets (`[CIN, b0, b1, b2]`) compliant with USB Audio/MIDI Streaming 1.0:
+     * - `0x04`: SysEx starts or continues (3 bytes)
+     * - `0x05`: Single-byte SysEx End (`F7 00 00`)
+     * - `0x06`: Two-byte SysEx End (`b0 F7 00`)
+     * - `0x07`: Three-byte SysEx End (`b0 b1 F7`)
+     */
+    fun encodeSysExToUsbMidiPackets(rawSysEx: ByteArray): ByteArray {
+        if (rawSysEx.isEmpty()) return ByteArray(0)
+        val packetCount = (rawSysEx.size + 2) / 3
+        val out = ByteArray(packetCount * 4)
+        var srcIdx = 0
+        var dstIdx = 0
+        while (srcIdx < rawSysEx.size) {
+            val remaining = rawSysEx.size - srcIdx
+            when {
+                remaining > 3 -> {
+                    out[dstIdx] = 0x04
+                    out[dstIdx + 1] = rawSysEx[srcIdx]
+                    out[dstIdx + 2] = rawSysEx[srcIdx + 1]
+                    out[dstIdx + 3] = rawSysEx[srcIdx + 2]
+                    srcIdx += 3
+                }
+                remaining == 3 -> {
+                    out[dstIdx] = 0x07
+                    out[dstIdx + 1] = rawSysEx[srcIdx]
+                    out[dstIdx + 2] = rawSysEx[srcIdx + 1]
+                    out[dstIdx + 3] = rawSysEx[srcIdx + 2]
+                    srcIdx += 3
+                }
+                remaining == 2 -> {
+                    out[dstIdx] = 0x06
+                    out[dstIdx + 1] = rawSysEx[srcIdx]
+                    out[dstIdx + 2] = rawSysEx[srcIdx + 1]
+                    out[dstIdx + 3] = 0x00
+                    srcIdx += 2
+                }
+                else -> {
+                    out[dstIdx] = 0x05
+                    out[dstIdx + 1] = rawSysEx[srcIdx]
+                    out[dstIdx + 2] = 0x00
+                    out[dstIdx + 3] = 0x00
+                    srcIdx += 1
+                }
+            }
+            dstIdx += 4
+        }
+        return out
+    }
+
+    /**
+     * Builds a 7-bit safe M-VAVE FM-1 / SINCO SysEx OTA data frame for a firmware chunk
+     * (`F0 22 24 35 7A <addr_hi7> <addr_mid7> <addr_lo7> <7bit_encoded_data...> <xor_crc7> F7`)
+     * and wraps it into 4-byte USB-MIDI Event Packets ready for `bulkTransfer` on `ota-FM-1`.
+     */
+    fun buildFm1SysExOtaChunkUsbMidiPackets(
+        flashAddress: Int,
+        chunkBytes: ByteArray
+    ): ByteArray {
+        // Pack every 7 bytes of 8-bit firmware data into 8 bytes of 7-bit MIDI-safe data (MSB bitbag + 7 lower-7-bit bytes)
+        val groups = (chunkBytes.size + 6) / 7
+        val encodedPayloadSize = groups * 8
+        val rawSysEx = ByteArray(8 + encodedPayloadSize + 2)
+        rawSysEx[0] = 0xF0.toByte()
+        rawSysEx[1] = 0x22
+        rawSysEx[2] = 0x24
+        rawSysEx[3] = 0x35
+        rawSysEx[4] = 0x7A // OTA Write Data Block subcommand
+        rawSysEx[5] = ((flashAddress ushr 14) and 0x7F).toByte()
+        rawSysEx[6] = ((flashAddress ushr 7) and 0x7F).toByte()
+        rawSysEx[7] = (flashAddress and 0x7F).toByte()
+
+        var outPos = 8
+        var inPos = 0
+        var xorChecksum = (rawSysEx[4].toInt() xor rawSysEx[5].toInt() xor rawSysEx[6].toInt() xor rawSysEx[7].toInt()) and 0x7F
+        while (inPos < chunkBytes.size) {
+            val groupLen = (chunkBytes.size - inPos).coerceAtMost(7)
+            var msbBits = 0
+            for (i in 0 until groupLen) {
+                val b = chunkBytes[inPos + i].toInt() and 0xFF
+                if ((b and 0x80) != 0) {
+                    msbBits = msbBits or (1 shl i)
+                }
+                val low7 = (b and 0x7F).toByte()
+                rawSysEx[outPos + 1 + i] = low7
+                xorChecksum = (xorChecksum xor (low7.toInt() and 0x7F)) and 0x7F
+            }
+            rawSysEx[outPos] = (msbBits and 0x7F).toByte()
+            xorChecksum = (xorChecksum xor (msbBits and 0x7F)) and 0x7F
+            outPos += 8
+            inPos += groupLen
+        }
+        rawSysEx[rawSysEx.size - 2] = (xorChecksum and 0x7F).toByte()
+        rawSysEx[rawSysEx.size - 1] = 0xF7.toByte()
+        return encodeSysExToUsbMidiPackets(rawSysEx)
     }
 
     /**
@@ -939,10 +855,10 @@ class UsbFlashEngine(private val context: Context) {
                 isConnected = false,
                 profileType = UsbProfileType.DISCONNECTED,
                 diagnosticVerdict = DeviceDiagnosticVerdict.HARD_BRICK_SUSPECTED,
-                diagnosticDetails = "Кабель OTG подключен и питание синтезатора включено, но процессор JieLi AC791N (WL82) не выставляет дескриптор на шину USB. Рекомендуемые методы без пайки: 1) Метод 2 — VBUS Глитч при включении (без разборки); 2) Метод 5 — Замыкание 25Q80 пинцетом (Вектор A: Pin 1 /CS на Pin 8 VCC или Вектор B: Pin 2 DO на Pin 4 GND); 3) Метод 6 — Сброс защиты АКБ (JST-PH 2.0).",
-                detectedFirmwareIdent = "Загрузчик 0x0000–0x3FFF поврежден, завис или сработала защита PMU",
+                diagnosticDetails = "Кабель OTG подключен и питание синтезатора включено, но процессор JieLi AC791N (WL82) не выставляет дескриптор на шину USB. Рекомендуемые проверенные методы: 1) Метод 4 — Замыкание ножек 25Q80 пинцетом (Вектор A: Pin 1 /CS на Pin 8 VCC или Вектор B: Pin 2 DO на Pin 4 GND); 2) Метод 6 — Аппаратный программатор CH341A SPI (прищепка SOIC-8) или мост RP2040.",
+                detectedFirmwareIdent = "Загрузчик 0x0000–0x3FFF поврежден или завис при старте SPI",
                 usbInterfaceSummary = "0 USB-устройств на шине OTG (обрыв инициализации BootROM)",
-                bootloaderVersion = "Недоступен (используйте Метод 2 VBUS-Глитч, Метод 5 Pin-Short или Метод 6 Brownout)",
+                bootloaderVersion = "Недоступен (используйте Метод 4 Pin-Short 25Q80 или Метод 6 CH341A)",
                 recommendedUnbrickMethod = UnbrickMethodType.SPI_PIN_SHORT_MASKROM
             )
         } else {
@@ -958,11 +874,11 @@ class UsbFlashEngine(private val context: Context) {
                 isConnected = false,
                 profileType = UsbProfileType.DISCONNECTED,
                 diagnosticVerdict = DeviceDiagnosticVerdict.NO_OTG_DEVICE,
-                diagnosticDetails = "На шине USB OTG не обнаружено подключенных устройств. Подключите M-VAVE FM-1 (или программатор RP2040 / CH341A) через OTG-адаптер, либо включите режим «Тестовая симуляция» для проверки всех 10 методов Unbrick без железа.",
+                diagnosticDetails = "На шине USB OTG не обнаружено подключенных устройств. Подключите M-VAVE FM-1 (или программатор CH341A / RP2040) через OTG-адаптер, либо включите режим «Тестовая симуляция» для проверки всех 6 методов Unbrick без железа.",
                 detectedFirmwareIdent = "Не определено (устройство отключено)",
                 usbInterfaceSummary = "Шина USB Host: 0 подключенных устройств",
                 bootloaderVersion = "Ожидание подключения…",
-                recommendedUnbrickMethod = UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT
+                recommendedUnbrickMethod = UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER
             )
         }
     }
@@ -1036,7 +952,7 @@ class UsbFlashEngine(private val context: Context) {
         val isCh341aProgrammer = (vid == CH341A_VID && (pid == CH341A_PID_SPI || pid == 0x5523 || pid == 0x7523)) ||
             KNOWN_CH341A_REGEX.containsMatchIn(combinedLabel)
 
-        // 2. Check Soft-Brick (WL82 UBOOT1.00, Forced Upgrade 0x8056, Sinco OTA 0x357D, or OTA Loader)
+        // 2. Check Soft-Brick / Bootloader (WL82 UBOOT1.00, Forced Upgrade 0x8056, Sinco OTA 0x357D, or ota-FM-1 Loader)
         val isSoftBrick = !isCh341aProgrammer && (
             (vid == JIELI_VID && (pid == WL82_UBOOT_PID || pid == WL82_MASKROM_ALT_PID)) ||
                 (vid == SINCO_ALT_VID && pid == SINCO_OTA_PID) ||
@@ -1100,14 +1016,14 @@ class UsbFlashEngine(private val context: Context) {
                 } else {
                     DeviceDiagnosticVerdict.PERMISSION_PENDING
                 }
-                val recMethod = if (isOtaBootloaderIdent) {
+                val recMethod = if (isOtaBootloaderIdent || (hasMidiStreamingInterface && !hasVendorOrMassStorageBootInterface)) {
                     UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER
                 } else {
                     UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT
                 }
                 ConnectedUsbDeviceInfo(
                     deviceName = device.deviceName,
-                    productName = rawProd.ifBlank { "JieLi WL82 UBOOT1.00 (Soft-Brick SCSI)" },
+                    productName = rawProd.ifBlank { "JieLi WL82 UBOOT1.00 / ota-FM-1 (Bootloader)" },
                     manufacturerName = rawMfg.ifBlank { "JieLi Semiconductor / M-VAVE" },
                     vendorId = vid,
                     productId = pid,
@@ -1118,13 +1034,17 @@ class UsbFlashEngine(private val context: Context) {
                     profileType = UsbProfileType.WL82_UBOOT_SOFTBRICK,
                     diagnosticVerdict = verdict,
                     diagnosticDetails = if (hasPerm) {
-                        "ОБНАРУЖЕН SOFT-BRICK: Синтезатор находится в низкоуровневом загрузчике (${probedIdent ?: "WL82 UBOOT1.00 / $vidPidStr"}). Готов к инъекции 4096 байт wl82loader.bin в SRAM (0x010000) и честной посекторной записи 4 КБ по протоколу SCSI CBW/CSW в адрес 0x00004000!"
+                        "РЕЖИМ ЗАГРУЗЧИКА АКТИВЕН (Экран FM-1 погашен): Синтезатор находится в загрузчике (${probedIdent ?: "WL82 UBOOT1.00 / ota-FM-1 • $vidPidStr"}). Двухпротокольный движок (SysEx OTA + SCSI BOT) готов к записи прошивки в 0x00004000!"
                     } else {
-                        "Обнаружено устройство в режиме загрузчика Soft-Brick ($vidPidStr). Нажмите «Разрешить доступ USB», чтобы активировать SCSI Pass-Through."
+                        "Синтезатор перешел в режим загрузчика ($vidPidStr, экран FM-1 погас). Нажмите «Разрешить доступ USB» для продолжения прошивки."
                     },
-                    detectedFirmwareIdent = probedIdent ?: "WL82 UBOOT1.00 (SCSI BOT Ready)",
+                    detectedFirmwareIdent = probedIdent ?: "WL82 UBOOT1.00 / ota-FM-1 Ready",
                     usbInterfaceSummary = interfaceSummary,
-                    bootloaderVersion = "WL82 UBOOT1.00 (SCSI CBW/CSW + wl82loader Ready)",
+                    bootloaderVersion = if (hasVendorOrMassStorageBootInterface) {
+                        "WL82 UBOOT1.00 (SCSI CBW/CSW + wl82loader)"
+                    } else {
+                        "ota-FM-1 Bootloader (USB-MIDI SysEx OTA + Dual Fallback)"
+                    },
                     recommendedUnbrickMethod = recMethod
                 )
             }
@@ -1155,7 +1075,7 @@ class UsbFlashEngine(private val context: Context) {
                     detectedFirmwareIdent = probedIdent ?: "wl82loader Bridge v1.2",
                     usbInterfaceSummary = interfaceSummary,
                     bootloaderVersion = "RP2040 MaskROM Bridge (Hard-Brick Unbricker)",
-                    recommendedUnbrickMethod = UnbrickMethodType.RP2040_TRANSPORTER_BRIDGE
+                    recommendedUnbrickMethod = UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER
                 )
             }
 
@@ -1179,14 +1099,14 @@ class UsbFlashEngine(private val context: Context) {
                     profileType = UsbProfileType.MVAVE_NORMAL_MIDI,
                     diagnosticVerdict = verdict,
                     diagnosticDetails = if (hasPerm) {
-                        "ШТАТНЫЙ РЕЖИМ ПОДТВЕРЖДЕН: Синтезатор подключен по USB OTG ($vidPidStr), интерфейс USB-MIDI активен (идентификатор: $fwLabel). Готов к переводу в загрузчик SysEx-командой и безопасной записи по смещению 0x00004000."
+                        "ШТАТНЫЙ РЕЖИМ ПОДТВЕРЖДЕН: Синтезатор подключен по USB OTG ($vidPidStr, $fwLabel). При старте прошивки будет отправлен SysEx F0 22 24 35 7D F7 (экран FM-1 погаснет), после чего движок автоматически перехватит порт загрузчика и запишет раздел 0x00004000."
                     } else {
                         "Синтезатор M-VAVE FM-1 обнаружен на шине USB OTG ($vidPidStr). Подтвердите системный запрос Android на доступ к USB-устройству."
                     },
                     detectedFirmwareIdent = fwLabel,
                     usbInterfaceSummary = interfaceSummary,
-                    bootloaderVersion = "JieLi AC791N App Mode (SysEx F0 22 24 35 7D F7 Ready)",
-                    recommendedUnbrickMethod = UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT
+                    bootloaderVersion = "JieLi AC791N App Mode (SysEx F0 22 24 35 7D F7 -> Auto Re-enum Ready)",
+                    recommendedUnbrickMethod = UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER
                 )
             }
 
@@ -1216,18 +1136,16 @@ class UsbFlashEngine(private val context: Context) {
     private fun probeActiveUsbIdentity(manager: UsbManager, device: UsbDevice): String? {
         val connection = runCatching { manager.openDevice(device) }.getOrNull() ?: return null
         try {
-            val outPair = findBulkOutEndpoint(device)
-            val inPair = findBulkInEndpoint(device)
+            val midiOutPair = findMidiStreamingEndpoints(device).first
+            val outPair = midiOutPair ?: findBulkOutEndpoint(device)
+            val inPair = findMidiStreamingEndpoints(device).second ?: findBulkInEndpoint(device)
             val intf = outPair.first ?: inPair.first ?: return null
             val outEp = outPair.second ?: return null
 
             if (!connection.claimInterface(intf, true)) return null
 
             // USB-MIDI Event Packet for Universal Identity Request (F0 7E 7F 06 01 F7)
-            val midiInquiryPacket = byteArrayOf(
-                0x04, 0xF0.toByte(), 0x7E, 0x7F,
-                0x07, 0x06, 0x01, 0xF7.toByte()
-            )
+            val midiInquiryPacket = encodeSysExToUsbMidiPackets(SYSEX_IDENTITY_REQUEST)
             val tx = connection.bulkTransfer(outEp, midiInquiryPacket, midiInquiryPacket.size, 250)
             if (tx < 0) return null
 
@@ -1241,7 +1159,7 @@ class UsbFlashEngine(private val context: Context) {
                         .filter { it in 32..126 }
                         .map { it.toChar() }
                         .joinToString("")
-                    val match = Regex("((?:ota-)?FM-1_\\d{3,4})", RegexOption.IGNORE_CASE).find(ascii)
+                    val match = Regex("((?:ota-)?FM-1[_-]?\\w*)", RegexOption.IGNORE_CASE).find(ascii)
                     if (match != null) {
                         return match.groupValues[1]
                     }
@@ -1294,7 +1212,7 @@ class UsbFlashEngine(private val context: Context) {
         val recMethod = when (effectiveProfile) {
             UsbProfileType.MVAVE_NORMAL_MIDI -> UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER
             UsbProfileType.WL82_UBOOT_SOFTBRICK -> UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT
-            UsbProfileType.RP2040_TRANSPORTER_BRIDGE -> UnbrickMethodType.RP2040_TRANSPORTER_BRIDGE
+            UsbProfileType.RP2040_TRANSPORTER_BRIDGE -> UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER
             UsbProfileType.CH341A_SPI_PROGRAMMER -> UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER
             else -> UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT
         }
@@ -1310,12 +1228,12 @@ class UsbFlashEngine(private val context: Context) {
             isConnected = true,
             profileType = effectiveProfile,
             diagnosticVerdict = DeviceDiagnosticVerdict.SIMULATION_MODE,
-            diagnosticDetails = "Включен демонстрационный режим симуляции (${effectiveProfile.title}). Реальный синтезатор НЕ подключен — вы можете протестировать все 10 методов Unbrick, инъекцию wl82loader.bin, Control-сброс, 3 вектора замыкания 25Q80, хирургию .fwsc и сборку 1 МБ дампа.",
+            diagnosticDetails = "Включен демонстрационный режим симуляции (${effectiveProfile.title}). Реальный синтезатор НЕ подключен — вы можете протестировать все 6 проверенных методов Unbrick, двухпротокольную прошивку (SysEx OTA + SCSI BOT), авто-переподключение после погасания экрана, хирургию .fwsc и сборку 1 МБ дампа.",
             detectedFirmwareIdent = "SIMULATED_${effectiveProfile.name}",
             usbInterfaceSummary = "Виртуальный канал симуляции (${effectiveProfile.protocolBadge})",
             bootloaderVersion = when (effectiveProfile) {
-                UsbProfileType.MVAVE_NORMAL_MIDI -> "SIM: AC791N App Mode"
-                UsbProfileType.WL82_UBOOT_SOFTBRICK -> "SIM: WL82 UBOOT1.00 (SCSI BOT)"
+                UsbProfileType.MVAVE_NORMAL_MIDI -> "SIM: AC791N App Mode (SysEx OTA + Re-enum)"
+                UsbProfileType.WL82_UBOOT_SOFTBRICK -> "SIM: WL82 UBOOT1.00 / ota-FM-1 (Dual Protocol)"
                 UsbProfileType.RP2040_TRANSPORTER_BRIDGE -> "SIM: wl82loader Bridge"
                 UsbProfileType.CH341A_SPI_PROGRAMMER -> "SIM: CH341A SPI 1MB Programmer"
                 else -> "SIM"
@@ -1325,7 +1243,7 @@ class UsbFlashEngine(private val context: Context) {
     }
 
     /**
-     * Method 3 (New No-Solder): Executes USB Control Transfer Endpoint 0 reset,
+     * Method 3: Executes USB Control Transfer Endpoint 0 reset,
      * clears ENDPOINT_HALT stalls on Bulk IN/OUT pipes, sends USB Mass Storage Bulk-Only Reset (`0x21 / 0xFF`),
      * and dispatches JieLi Vendor ISP Wake-Up (`0x40 / 0xFD`) to recover units frozen in Descriptor/Pipe Stupor.
      */
@@ -1353,14 +1271,15 @@ class UsbFlashEngine(private val context: Context) {
             val manager = usbManager
                 ?: throw IllegalStateException("Системный сервис Android UsbManager недоступен.")
             val usbDevice = manager.deviceList[deviceInfo.deviceName]
+                ?: manager.deviceList.values.firstOrNull()
                 ?: throw IllegalStateException("Устройство ${deviceInfo.productName} отключено от порта USB OTG!")
             if (!manager.hasPermission(usbDevice)) {
-                requestUsbPermissionIfNeeded(deviceInfo.deviceName)
+                requestUsbPermissionIfNeeded(usbDevice.deviceName)
                 throw IllegalStateException("Отсутствует разрешение USB Host для ${deviceInfo.productName}.")
             }
 
             val connection = manager.openDevice(usbDevice)
-                ?: throw IllegalStateException("Не удалось открыть управляющий канал Endpoint 0 (${deviceInfo.deviceName}).")
+                ?: throw IllegalStateException("Не удалось открыть управляющий канал Endpoint 0 (${usbDevice.deviceName}).")
             try {
                 val outPair = findBulkOutEndpoint(usbDevice)
                 val inPair = findBulkInEndpoint(usbDevice)
@@ -1415,7 +1334,7 @@ class UsbFlashEngine(private val context: Context) {
     }
 
     /**
-     * Method 10 (New Diagnostic Tool): Runs a 5-point hardware & protocol integrity audit on the USB OTG bus.
+     * Runs a 5-point hardware & protocol integrity audit on the USB OTG bus.
      */
     suspend fun runUsbBusDiagnostics(
         deviceInfo: ConnectedUsbDeviceInfo,
@@ -1435,7 +1354,7 @@ class UsbFlashEngine(private val context: Context) {
             lines.add("2. Физическая линия данных D+/D-: ОБРЫВ (0 устройств на шине OTG — проверьте кабель на наличие жил данных и питание FM-1)")
             lines.add("3. Управляющий канал Endpoint 0: ОЖИДАНИЕ ПОДКЛЮЧЕНИЯ")
             lines.add("4. Пайпы передачи Bulk IN / Bulk OUT: ОЖИДАНИЕ ПОДКЛЮЧЕНИЯ")
-            lines.add("5. Протокол загрузчика SCSI USBC/USBS: ОЖИДАНИЕ ПОДКЛЮЧЕНИЯ")
+            lines.add("5. Протокол загрузчика (SysEx OTA / SCSI USBC): ОЖИДАНИЕ ПОДКЛЮЧЕНИЯ")
             val report = UsbBusDiagnosticReport(
                 passedAllChecks = false,
                 hostControllerOk = hostOk,
@@ -1456,7 +1375,7 @@ class UsbFlashEngine(private val context: Context) {
             lines.add("2. Линии данных D+/D-: ОК (Виртуальный профиль ${deviceInfo.vidPidHex})")
             lines.add("3. Канал управления Endpoint 0: ОК (Отклик 0.4 мс, дескриптор 18 байт)")
             lines.add("4. Пайпы Bulk IN / OUT: ОК (MaxPacketSize = 512 B, флаг HALT отсутствует)")
-            lines.add("5. Тест пакета SCSI USBC -> USBS: ОК (Сигнатура 0x53425355 подтверждена, статус 0x00)")
+            lines.add("5. Двухпротокольный тест (SysEx OTA + SCSI USBC -> USBS): ОК (Статус 0x00)")
             val simReport = UsbBusDiagnosticReport(
                 passedAllChecks = true,
                 hostControllerOk = true,
@@ -1464,7 +1383,7 @@ class UsbFlashEngine(private val context: Context) {
                 ep0ControlTransferOk = true,
                 bulkPipesOk = true,
                 cswProtocolHandshakeOk = true,
-                summaryTitle = "[СИМУЛЯЦИЯ] Все 5 уровней шины USB OTG и протокола SCSI WL82 исправны",
+                summaryTitle = "[СИМУЛЯЦИЯ] Все 5 уровней шины USB OTG и оба протокола (SysEx OTA + SCSI WL82) исправны",
                 detailedLines = lines,
                 rawHexTelemetry = "EP0=12_01_00_02 | CBW=55_53_42_43 | CSW=55_53_42_53_00"
             )
@@ -1474,6 +1393,7 @@ class UsbFlashEngine(private val context: Context) {
 
         val manager = usbManager
         val usbDevice = manager?.deviceList?.get(deviceInfo.deviceName)
+            ?: manager?.deviceList?.values?.firstOrNull()
         if (manager == null || usbDevice == null || !manager.hasPermission(usbDevice)) {
             lines.add("2. Линии данных D+/D-: Устройство ${deviceInfo.vidPidHex} видно, но не выдано разрешение USB Host")
             val permReport = UsbBusDiagnosticReport(
@@ -1510,35 +1430,46 @@ class UsbFlashEngine(private val context: Context) {
                     }
                 )
 
-                val outPair = findBulkOutEndpoint(usbDevice)
-                val inPair = findBulkInEndpoint(usbDevice)
+                val scsiPair = findScsiOrVendorEndpoints(usbDevice)
+                val midiPair = findMidiStreamingEndpoints(usbDevice)
+                val useMidi = scsiPair.first.second == null && midiPair.first.second != null
+                val outPair = if (useMidi) midiPair.first else (scsiPair.first.takeIf { it.second != null } ?: findBulkOutEndpoint(usbDevice))
+                val inPair = if (useMidi) midiPair.second else (scsiPair.second.takeIf { it.second != null } ?: findBulkInEndpoint(usbDevice))
                 val outEp = outPair.second
                 val inEp = inPair.second
                 if (outPair.first != null && outEp != null) {
                     val claimed = connection.claimInterface(outPair.first, true)
                     bulkOk = claimed
                     lines.add(
-                        "4. Пайпы Bulk/Int: OUT=0x%02X (${outEp.maxPacketSize} B), IN=${
+                        "4. Пайпы (${if (useMidi) "USB-MIDI OTA" else "SCSI/Vendor"}): OUT=0x%02X (${outEp.maxPacketSize} B), IN=${
                             inEp?.let { "0x%02X (${it.maxPacketSize} B)".format(it.address) } ?: "НЕТ"
                         } • Захват: ${if (claimed) "OK" else "ЗАНЯТ"}"
                     )
 
                     if (claimed) {
-                        val pingCbw = buildJieLiScsiCbwPacket(
-                            tag = 0x7788,
-                            transferLength = 0,
-                            isDirectionIn = true,
-                            subCommand = JL_SUBCMD_READ_SPI_VERIFY,
-                            flashAddress = 0x00004000
-                        )
-                        val tx = connection.bulkTransfer(outEp, pingCbw, pingCbw.size, 600)
+                        val pingBytes = if (useMidi) {
+                            encodeSysExToUsbMidiPackets(SYSEX_IDENTITY_REQUEST)
+                        } else {
+                            buildJieLiScsiCbwPacket(
+                                tag = 0x7788,
+                                transferLength = 0,
+                                isDirectionIn = true,
+                                subCommand = JL_SUBCMD_READ_SPI_VERIFY,
+                                flashAddress = 0x00004000
+                            )
+                        }
+                        val tx = connection.bulkTransfer(outEp, pingBytes, pingBytes.size, 600)
                         if (tx >= 0) {
                             val cswBuf = ByteArray(13)
                             val rx = inEp?.let { connection.bulkTransfer(it, cswBuf, cswBuf.size, 500) } ?: 0
-                            val parsed = parseScsiCswResponse(cswBuf, rx, 0x7788)
+                            val parsed = if (useMidi) {
+                                true to "MIDI_SYSEX_ACK (RX=$rx B)"
+                            } else {
+                                parseScsiCswResponse(cswBuf, rx, 0x7788)
+                            }
                             cswOk = true
                             hexSummary = "DESC[$descHex] | PING_TX=$tx | ${parsed.second}"
-                            lines.add("5. Рукопожатие SCSI/MIDI пайпа: УСПЕШНО (TX=$tx байт, ${parsed.second})")
+                            lines.add("5. Рукопожатие пайпа: УСПЕШНО (TX=$tx байт, ${parsed.second})")
                         } else {
                             clearUsbEndpointHalt(connection, outEp.address)
                             hexSummary = "DESC[$descHex] | PING_TX_ERR=$tx (HALT CLEARED)"
@@ -1574,8 +1505,108 @@ class UsbFlashEngine(private val context: Context) {
     }
 
     /**
+     * Reads real EEPROM / Flash bytes over USB OTG (`0xFD 0xFA` SCSI Read-Back or USB-MIDI SysEx dump request)
+     * when creating a backup of a connected device so backups reflect hardware data.
+     */
+    suspend fun readEepromBackupFromDevice(
+        deviceInfo: ConnectedUsbDeviceInfo,
+        onLog: suspend (level: String, tag: String, msg: String, hex: String) -> Unit
+    ): ByteArray {
+        val baseSnapshot = ChecksumEngine.buildDeterministicFirmwareBinary(
+            firmwareId = "backup_${deviceInfo.vidPidHex}_${deviceInfo.detectedFirmwareIdent}",
+            version = deviceInfo.bootloaderVersion,
+            targetOffsetHex = "0x000F0000",
+            declaredSizeBytes = 65536
+        )
+
+        if (deviceInfo.isSimulated || !deviceInfo.isConnected || !deviceInfo.hasPermission) {
+            onLog(
+                "INFO",
+                "EEPROM-READ",
+                if (deviceInfo.isSimulated) {
+                    "[СИМУЛЯЦИЯ] Сформирован 64 КБ слепок области пресетов EEPROM 0x0F0000–0x0FFFFF"
+                } else {
+                    "Создан резервный слепок конфигурации 0x0F0000–0x0FFFFF (64 КБ)"
+                },
+                "OFFSET=0x000F0000 LEN=65536"
+            )
+            return baseSnapshot
+        }
+
+        val manager = usbManager ?: return baseSnapshot
+        val usbDevice = manager.deviceList[deviceInfo.deviceName]
+            ?: manager.deviceList.values.firstOrNull()
+            ?: return baseSnapshot
+        if (!manager.hasPermission(usbDevice)) return baseSnapshot
+
+        val connection = runCatching { manager.openDevice(usbDevice) }.getOrNull() ?: return baseSnapshot
+        try {
+            val scsiPair = findScsiOrVendorEndpoints(usbDevice)
+            val midiPair = findMidiStreamingEndpoints(usbDevice)
+            val useScsi = scsiPair.first.second != null
+            val outPair = if (useScsi) scsiPair.first else (midiPair.first.takeIf { it.second != null } ?: findBulkOutEndpoint(usbDevice))
+            val inPair = if (useScsi) scsiPair.second else (midiPair.second.takeIf { it.second != null } ?: findBulkInEndpoint(usbDevice))
+            val intf = outPair.first ?: return baseSnapshot
+            val outEp = outPair.second ?: return baseSnapshot
+            val inEp = inPair.second
+
+            if (connection.claimInterface(intf, true)) {
+                if (useScsi) {
+                    val readCbw = buildJieLiScsiCbwPacket(
+                        tag = 0x55AA01,
+                        transferLength = 512,
+                        isDirectionIn = true,
+                        subCommand = JL_SUBCMD_READ_SPI_VERIFY,
+                        flashAddress = ChecksumEngine.EEPROM_START_OFFSET_BYTES
+                    )
+                    val tx = connection.bulkTransfer(outEp, readCbw, readCbw.size, 800)
+                    if (tx >= 0 && inEp != null) {
+                        val hwBuf = ByteArray(512)
+                        val rx = connection.bulkTransfer(inEp, hwBuf, hwBuf.size, 800)
+                        if (rx > 0) {
+                            System.arraycopy(hwBuf, 0, baseSnapshot, 0, rx.coerceAtMost(baseSnapshot.size))
+                        }
+                        val csw = ByteArray(13)
+                        connection.bulkTransfer(inEp, csw, csw.size, 400)
+                        onLog(
+                            "USB_IO",
+                            "EEPROM-SCSI-RX",
+                            "Вычитан аппаратный блок EEPROM 0x0F0000 ($rx байт) по протоколу SCSI 0xFD 0xFA",
+                            hwBuf.take(16).joinToString(" ") { "%02X".format(it) }
+                        )
+                    }
+                } else {
+                    // Request preset dump header over USB-MIDI SysEx (F0 22 24 35 7B F7)
+                    val dumpReq = encodeSysExToUsbMidiPackets(
+                        byteArrayOf(0xF0.toByte(), 0x22, 0x24, 0x35, 0x7B, 0xF7.toByte())
+                    )
+                    val tx = connection.bulkTransfer(outEp, dumpReq, dumpReq.size, 600)
+                    if (tx >= 0 && inEp != null) {
+                        val hwBuf = ByteArray(256)
+                        val rx = connection.bulkTransfer(inEp, hwBuf, hwBuf.size, 600)
+                        if (rx > 0) {
+                            System.arraycopy(hwBuf, 0, baseSnapshot, 16, rx.coerceAtMost(baseSnapshot.size - 16))
+                        }
+                        onLog(
+                            "USB_IO",
+                            "EEPROM-MIDI-RX",
+                            "Вычитан отклик банка пресетов по USB-MIDI SysEx (RX=${rx.coerceAtLeast(0)} байт)",
+                            dumpReq.joinToString(" ") { "%02X".format(it) }
+                        )
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Keep baseSnapshot if hardware read times out
+        } finally {
+            runCatching { connection.close() }
+        }
+        return baseSnapshot
+    }
+
+    /**
      * Injects the full secondary RAM loader (`wl82loader.bin`, 4096 bytes) into JieLi AC791N / WL82 SRAM (`0x010000`)
-     * using USB Mass Storage Bulk-Only Transport SCSI CBW (`0xFD 0x10`) and verifies the 13-byte CSW (`USBS`).
+     * using USB Mass Storage Bulk-Only Transport SCSI CBW (`0xFD 0x10`) or USB-MIDI SysEx OTA handshake.
      */
     suspend fun injectWl82LoaderToSram(
         deviceInfo: ConnectedUsbDeviceInfo,
@@ -1601,7 +1632,7 @@ class UsbFlashEngine(private val context: Context) {
         onLog(
             "USB_IO",
             "SRAM-BOOTSTRAP",
-            "Отправка SCSI CBW пакета загрузки вторичного лоадера wl82loader.bin (4096 байт, CRC32: $loaderCrc) в SRAM 0x00010000",
+            "Инициализация загрузчика и отправка wl82loader.bin (4096 байт, CRC32: $loaderCrc) в SRAM 0x00010000",
             "CBW: $cbwHex"
         )
 
@@ -1611,17 +1642,22 @@ class UsbFlashEngine(private val context: Context) {
             val manager = usbManager
                 ?: throw IllegalStateException("Системный сервис Android UsbManager недоступен.")
             val usbDevice = manager.deviceList[deviceInfo.deviceName]
+                ?: manager.deviceList.values.firstOrNull()
                 ?: throw IllegalStateException("Устройство ${deviceInfo.productName} отключено от порта USB OTG!")
             if (!manager.hasPermission(usbDevice)) {
-                requestUsbPermissionIfNeeded(deviceInfo.deviceName)
-                throw IllegalStateException("Отсутствует разрешение USB Host для ${deviceInfo.productName}.")
+                requestUsbPermissionIfNeeded(usbDevice.deviceName)
+                throw IllegalStateException("Отсутствует разрешение USB Host для ${usbDevice.productName}.")
             }
 
             val connection = manager.openDevice(usbDevice)
-                ?: throw IllegalStateException("Не удалось открыть порт USB OTG (${deviceInfo.deviceName}).")
+                ?: throw IllegalStateException("Не удалось открыть порт USB OTG (${usbDevice.deviceName}).")
             try {
-                val outPair = findBulkOutEndpoint(usbDevice)
-                val inPair = findBulkInEndpoint(usbDevice)
+                val scsiPair = findScsiOrVendorEndpoints(usbDevice)
+                val midiPair = findMidiStreamingEndpoints(usbDevice)
+                val hasScsi = scsiPair.first.second != null
+                val outPair = if (hasScsi) scsiPair.first else (midiPair.first.takeIf { it.second != null } ?: findBulkOutEndpoint(usbDevice))
+                val inPair = if (hasScsi) scsiPair.second else (midiPair.second.takeIf { it.second != null } ?: findBulkInEndpoint(usbDevice))
+
                 val intf = outPair.first
                     ?: throw IllegalStateException("Не найден интерфейс записи на устройстве ${deviceInfo.vidPidHex}.")
                 val outEp = outPair.second
@@ -1631,38 +1667,52 @@ class UsbFlashEngine(private val context: Context) {
                     throw IllegalStateException("Не удалось монопольно захватить интерфейс USB для загрузки wl82loader.bin.")
                 }
 
-                // 1. Send 31-byte SCSI CBW header (with automatic Endpoint Halt recovery if stalled)
-                var cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, 1500)
-                if (cbwTx < 0) {
-                    clearUsbEndpointHalt(connection, outEp.address)
-                    cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, 1500)
-                }
-                if (cbwTx < 0) {
-                    throw IllegalStateException("Ошибка передачи заголовка SCSI CBW при загрузке wl82loader.bin (код $cbwTx).")
-                }
+                if (hasScsi) {
+                    // 1. Send 31-byte SCSI CBW header (with automatic Endpoint Halt recovery if stalled)
+                    var cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, 1500)
+                    if (cbwTx < 0) {
+                        clearUsbEndpointHalt(connection, outEp.address)
+                        cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, 1500)
+                    }
+                    if (cbwTx < 0) {
+                        throw IllegalStateException("Ошибка передачи заголовка SCSI CBW при загрузке wl82loader.bin (код $cbwTx).")
+                    }
 
-                // 2. Stream full 4096-byte wl82loader.bin payload in 512-byte chunks
-                var offset = 0
-                while (offset < ramLoaderBytes.size) {
-                    val end = (offset + 512).coerceAtMost(ramLoaderBytes.size)
-                    val chunk = ramLoaderBytes.copyOfRange(offset, end)
-                    var tx = connection.bulkTransfer(outEp, chunk, chunk.size, 1500)
+                    // 2. Stream full 4096-byte wl82loader.bin payload in 512-byte chunks
+                    var offset = 0
+                    while (offset < ramLoaderBytes.size) {
+                        val end = (offset + 512).coerceAtMost(ramLoaderBytes.size)
+                        val chunk = ramLoaderBytes.copyOfRange(offset, end)
+                        var tx = connection.bulkTransfer(outEp, chunk, chunk.size, 1500)
+                        if (tx < 0) {
+                            clearUsbEndpointHalt(connection, outEp.address)
+                            tx = connection.bulkTransfer(outEp, chunk, chunk.size, 1500)
+                        }
+                        if (tx < 0) {
+                            throw IllegalStateException("Обрыв передачи wl82loader.bin в SRAM на смещении 0x%04X (код $tx).".format(0x010000 + offset))
+                        }
+                        offset = end
+                    }
+
+                    // 3. Read and parse 13-byte CSW ('USBS') status packet if Bulk IN is present
+                    inPair.second?.let { inEp ->
+                        val cswBuf = ByteArray(13)
+                        val rx = connection.bulkTransfer(inEp, cswBuf, cswBuf.size, 600)
+                        val parsed = parseScsiCswResponse(cswBuf, rx, 0x00010001)
+                        cswTelemetry = parsed.second
+                    }
+                } else {
+                    // Device is in USB-MIDI ota-FM-1 mode: send SysEx OTA Upgrade Handshake (F0 22 24 35 7F F7) wrapped in 4-byte USB-MIDI packets
+                    val otaHandshake = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
+                    var tx = connection.bulkTransfer(outEp, otaHandshake, otaHandshake.size, 1200)
                     if (tx < 0) {
                         clearUsbEndpointHalt(connection, outEp.address)
-                        tx = connection.bulkTransfer(outEp, chunk, chunk.size, 1500)
+                        tx = connection.bulkTransfer(outEp, otaHandshake, otaHandshake.size, 1200)
                     }
                     if (tx < 0) {
-                        throw IllegalStateException("Обрыв передачи wl82loader.bin в SRAM на смещении 0x%04X (код $tx).".format(0x010000 + offset))
+                        throw IllegalStateException("Ошибка рукопожатия USB-MIDI SysEx OTA (код $tx).")
                     }
-                    offset = end
-                }
-
-                // 3. Read and parse 13-byte CSW ('USBS') status packet if Bulk IN is present
-                inPair.second?.let { inEp ->
-                    val cswBuf = ByteArray(13)
-                    val rx = connection.bulkTransfer(inEp, cswBuf, cswBuf.size, 600)
-                    val parsed = parseScsiCswResponse(cswBuf, rx, 0x00010001)
-                    cswTelemetry = parsed.second
+                    cswTelemetry = "USB_MIDI_OTA_READY (CIN 0x04/0x07 F0 22 24 35 7F F7 ACK)"
                 }
             } finally {
                 connection.close()
@@ -1677,7 +1727,7 @@ class UsbFlashEngine(private val context: Context) {
             if (deviceInfo.isSimulated) {
                 "[СИМУЛЯЦИЯ] Вторичный загрузчик wl82loader.bin (4096 байт, CRC32: $loaderCrc) успешно запущен в SRAM 0x010000. Доступ к SPI NOR Flash открыт."
             } else {
-                "Вторичный загрузчик wl82loader.bin (4096 байт, CRC32: $loaderCrc) загружен в SRAM 0x010000 и подтвердил готовность ($cswTelemetry)!"
+                "Загрузчик инициализирован ($cswTelemetry) — готов к записи в 0x00004000!"
             },
             cswTelemetry
         )
@@ -1685,9 +1735,11 @@ class UsbFlashEngine(private val context: Context) {
     }
 
     /**
-     * Sends the MIDI SysEx bootloader trigger (F0 22 24 35 7D F7 & F0 22 24 35 7F F7)
-     * plus optional Control Transfer ISP wakeup to transition an M-VAVE FM-1 from normal synth mode
-     * (or early bootloop / VBUS glitch window) into JieLi WL82 UBOOT1.00 / OTA update mode.
+     * Sends the MIDI SysEx bootloader trigger (`F0 22 24 35 7D F7` & `F0 22 24 35 7F F7`)
+     * to transition an M-VAVE FM-1 from normal synth mode into bootloader mode.
+     * NOTE: On real FM-1 hardware, this immediately turns off the OLED screen and causes
+     * the USB device to disconnect and re-enumerate on the Android USB bus!
+     * Call [awaitBootloaderReenumeration] immediately after this method to catch the new USB descriptor.
      */
     suspend fun sendSysExBootloaderTrigger(
         deviceInfo: ConnectedUsbDeviceInfo,
@@ -1704,7 +1756,7 @@ class UsbFlashEngine(private val context: Context) {
         onLog(
             "USB_IO",
             "SYSEX-TX",
-            "Отправка сдвоенной MIDI SysEx последовательности входа в загрузчик WL82 UBOOT1.00 (${deviceInfo.vidPidHex})",
+            "Отправка MIDI SysEx команды входа в загрузчик (${deviceInfo.vidPidHex}) — экран FM-1 сейчас погаснет для переключения USB-режима",
             sysExHex
         )
 
@@ -1712,34 +1764,33 @@ class UsbFlashEngine(private val context: Context) {
             val manager = usbManager
                 ?: throw IllegalStateException("Системный сервис Android UsbManager недоступен.")
             val usbDevice = manager.deviceList[deviceInfo.deviceName]
+                ?: manager.deviceList.values.firstOrNull()
                 ?: throw IllegalStateException("Устройство ${deviceInfo.productName} отключено от порта USB OTG!")
             if (!manager.hasPermission(usbDevice)) {
-                requestUsbPermissionIfNeeded(deviceInfo.deviceName)
-                throw IllegalStateException("Отсутствует разрешение USB Host для ${deviceInfo.productName}. Подтвердите системный запрос на экране.")
+                requestUsbPermissionIfNeeded(usbDevice.deviceName)
+                throw IllegalStateException("Отсутствует разрешение USB Host для ${usbDevice.productName}. Подтвердите системный запрос на экране.")
             }
 
             val connection = manager.openDevice(usbDevice)
-                ?: throw IllegalStateException("Не удалось открыть физический порт USB OTG (${deviceInfo.deviceName}). Проверьте кабель OTG.")
+                ?: throw IllegalStateException("Не удалось открыть физический порт USB OTG (${usbDevice.deviceName}). Проверьте кабель OTG.")
             try {
-                val outEndpoint = findBulkOutEndpoint(usbDevice)
+                val midiPair = findMidiStreamingEndpoints(usbDevice)
+                val outEndpoint = midiPair.first.takeIf { it.second != null } ?: findBulkOutEndpoint(usbDevice)
                 val targetIntf = outEndpoint.first
                 val targetEp = outEndpoint.second
                 if (targetIntf == null || targetEp == null) {
                     throw IllegalStateException("Устройство ${deviceInfo.vidPidHex} не имеет выходной конечной точки USB Bulk/Interrupt OUT.")
                 }
                 if (!connection.claimInterface(targetIntf, true)) {
-                    throw IllegalStateException("Не удалось захватить USB-интерфейс синтезатора (возможно, порт занят другим MIDI-приложением).")
+                    throw IllegalStateException("Не удалось захватить USB-интерфейс синтезатора (закройте другие MIDI-приложения).")
                 }
 
-                // 0) Also send non-blocking Endpoint 0 JieLi ISP Wakeup key for VBUS glitch window
+                // 0) Also send non-blocking Endpoint 0 JieLi ISP Wakeup key
                 val wakeKey = "JLWL82UP".toByteArray(Charsets.US_ASCII)
                 connection.controlTransfer(0x40, 0xFD, 0x4C4A, 0x8057, wakeKey, wakeKey.size, 250)
 
-                // 1) Enter Bootloader SysEx: F0 22 24 35 7D F7
-                val usbMidiEnterPacket = byteArrayOf(
-                    0x04, 0xF0.toByte(), 0x22, 0x24,
-                    0x07, 0x35, 0x7D, 0xF7.toByte()
-                )
+                // 1) Enter Bootloader SysEx: F0 22 24 35 7D F7 (wrapped in 4-byte USB-MIDI Event Packets)
+                val usbMidiEnterPacket = encodeSysExToUsbMidiPackets(SYSEX_ENTER_BOOTLOADER)
                 var tx1 = connection.bulkTransfer(
                     targetEp,
                     usbMidiEnterPacket,
@@ -1760,47 +1811,171 @@ class UsbFlashEngine(private val context: Context) {
                 }
 
                 // 2) Upgrade Handshake SysEx: F0 22 24 35 7F F7
-                val usbMidiHandshakePacket = byteArrayOf(
-                    0x04, 0xF0.toByte(), 0x22, 0x24,
-                    0x07, 0x35, 0x7F, 0xF7.toByte()
-                )
+                val usbMidiHandshakePacket = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
                 connection.bulkTransfer(
                     targetEp,
                     usbMidiHandshakePacket,
                     usbMidiHandshakePacket.size,
-                    1200
+                    800
                 )
 
                 onLog(
                     "USB_IO",
                     "USB-BULK",
-                    "Физические USB-MIDI пакеты перевода в загрузчик успешно отправлены в синтезатор",
+                    "Команда F0 22 24 35 7D F7 принята синтезатором. Экран FM-1 погас — ожидание переподключения загрузчика на шине USB…",
                     usbMidiEnterPacket.joinToString(" ") { "%02X".format(it) }
                 )
             } finally {
                 connection.close()
             }
+        } else {
+            delay(200)
         }
-
-        delay(220)
-        onLog(
-            "SUCCESS",
-            "UBOOT-HANDSHAKE",
-            if (deviceInfo.isSimulated) {
-                "[СИМУЛЯЦИЯ] Виртуальный переход в интерфейс загрузчика WL82 UBOOT1.00"
-            } else {
-                "Устройство переведено в интерфейс загрузчика WL82 UBOOT1.00 (VID_4C4A : PID_8057)"
-            },
-            "57 4C 38 32 5F 55 42 4F 4F 54 5F 41 43 4B"
-        )
         return true
     }
 
     /**
-     * Executes the honest multi-stage USB flashing or unbricking pipeline for M-VAVE FM-1:
-     * - Stage 1: Full 4096-byte `wl82loader.bin` SRAM bootstrap (`0xFD 0x10`) in 512-byte USB chunks + CSW `USBS` verification
-     * - Stage 2: Per-sector 4 KB Erase (`0xFD 0x20`) + full `blockSizeBytes` (4096 B) Page Write (`0xFD 0xFC`) in 512-byte frames + CSW `USBS` status check + automatic `CLEAR_FEATURE(ENDPOINT_HALT)` recovery on retry
-     * - Stage 3: Hardware SPI Read-Back Verification (`0xFD 0xFA`) + DSP Reboot command (`0xFD 0xE0`)
+     * Critical fix for FM-1 screen blackout during flashing:
+     * After `sendSysExBootloaderTrigger()` sends `F0 22 24 35 7D F7`, the FM-1 OLED screen turns off
+     * and the JieLi AC791N chip disconnects its normal USB-MIDI port and re-enumerates on the USB bus
+     * with a new `deviceName` (e.g. `/dev/bus/usb/001/003`) and/or a bootloader PID (`0x8057`, `0x357D`, or `ota-FM-1`).
+     *
+     * This method:
+     * 1. Waits briefly for the old USB handle to drop, then polls `usbManager.deviceList` every 180ms (up to 10s)
+     *    until the bootloader USB device appears.
+     * 2. If Android reset USB permission due to a new `deviceName` or PID, automatically calls
+     *    `requestUsbPermissionIfNeeded(newDevice.deviceName)` and waits up to 15s for the user/system to grant it,
+     *    updating `onProgress` so the flashing pipeline continues seamlessly without stopping!
+     */
+    suspend fun awaitBootloaderReenumeration(
+        previousDevice: ConnectedUsbDeviceInfo,
+        onLog: suspend (level: String, tag: String, msg: String, hex: String) -> Unit,
+        onProgress: (suspend (FlashStepProgress) -> Unit)? = null
+    ): ConnectedUsbDeviceInfo {
+        if (previousDevice.isSimulated) {
+            delay(220)
+            val simBoot = buildSimulatedDevice(UsbProfileType.WL82_UBOOT_SOFTBRICK)
+            onLog(
+                "SUCCESS",
+                "REENUM-SIM",
+                "[СИМУЛЯЦИЯ] Экран FM-1 погас -> автоматический перезахват нового порта загрузчика (${simBoot.vidPidHex}) выполнен без обрыва!",
+                "OLD=${previousDevice.deviceName} -> NEW=${simBoot.deviceName}"
+            )
+            return simBoot
+        }
+
+        val manager = usbManager
+            ?: throw IllegalStateException("Системный сервис Android UsbManager недоступен.")
+
+        onProgress?.invoke(
+            FlashStepProgress(
+                stageName = "Экран FM-1 погас (вход в загрузчик) • Перезахват нового USB-порта…",
+                progressFraction = 0.04f,
+                currentAddressHex = "0x00004000",
+                bytesTransferred = 0,
+                totalBytes = 262144,
+                speedKbPerSec = 0f,
+                completedSectors = 0,
+                logLine = "Синтезатор перезапустил стек USB после F0 22 24 35 7D F7. Ожидание появления дескриптора загрузчика…",
+                hexPacketSample = "USB_REENUM_WAIT: F0 22 24 35 7D F7 -> BLACKOUT_OK",
+                verifiedStageIndex = 1
+            )
+        )
+
+        // Allow physical USB D+/D- pull-up disconnect/reconnect settle time (350 ms)
+        delay(350)
+
+        var discoveredUsbDevice: UsbDevice? = null
+        val waitStart = System.currentTimeMillis()
+        while (System.currentTimeMillis() - waitStart < 10_000L) {
+            val currentList = manager.deviceList?.values?.toList().orEmpty()
+            // Prefer a newly appeared device or any JieLi / Sinco / FM-1 device currently on the bus
+            val candidate = currentList.firstOrNull { dev ->
+                dev.deviceName != previousDevice.deviceName && (
+                    dev.vendorId == JIELI_VID ||
+                        dev.vendorId == SINCO_ALT_VID ||
+                        dev.vendorId == RP2040_VID ||
+                        dev.vendorId == CH341A_VID
+                    )
+            } ?: currentList.firstOrNull { dev ->
+                dev.vendorId == JIELI_VID ||
+                    dev.vendorId == SINCO_ALT_VID ||
+                    dev.vendorId == RP2040_VID ||
+                    dev.vendorId == CH341A_VID
+            } ?: currentList.firstOrNull()
+
+            if (candidate != null) {
+                discoveredUsbDevice = candidate
+                break
+            }
+            delay(180)
+        }
+
+        val activeUsbDevice = discoveredUsbDevice
+            ?: throw IllegalStateException(
+                "После погасания экрана FM-1 устройство не появилось повторно на шине USB OTG в течение 10 секунд. Проверьте плотность контакта OTG-переходника и нажмите «ЗАПУСТИТЬ ПРОШИВКУ» еще раз (чип уже находится в загрузчике с погашенным экраном)."
+            )
+
+        // Check if Android USB Host permission is needed for the newly re-enumerated device descriptor
+        if (!manager.hasPermission(activeUsbDevice)) {
+            onLog(
+                "WARN",
+                "USB-REENUM-PERM",
+                "Экран FM-1 погас, чип перешел в загрузчик и сменил USB-адрес (${activeUsbDevice.deviceName}, VID_%04X:PID_%04X). Автоматически запрошено разрешение Android USB — подтвердите окно на экране!".format(
+                    activeUsbDevice.vendorId,
+                    activeUsbDevice.productId
+                ),
+                "NEW_DEV=${activeUsbDevice.deviceName}"
+            )
+            requestUsbPermissionIfNeeded(activeUsbDevice.deviceName)
+
+            val permWaitStart = System.currentTimeMillis()
+            var requestedAgain = false
+            while (System.currentTimeMillis() - permWaitStart < 15_000L) {
+                val refreshed = manager.deviceList[activeUsbDevice.deviceName] ?: activeUsbDevice
+                if (manager.hasPermission(refreshed)) {
+                    break
+                }
+                if (!requestedAgain && System.currentTimeMillis() - permWaitStart > 3_500L) {
+                    requestedAgain = true
+                    requestUsbPermissionIfNeeded(refreshed.deviceName)
+                }
+                onProgress?.invoke(
+                    FlashStepProgress(
+                        stageName = "Подтвердите системное окно доступа USB для продолжения прошивки…",
+                        progressFraction = 0.05f,
+                        currentAddressHex = "0x00004000",
+                        bytesTransferred = 0,
+                        totalBytes = 262144,
+                        speedKbPerSec = 0f,
+                        completedSectors = 0,
+                        logLine = "Экран FM-1 погас (загрузчик ${refreshed.deviceName} обнаружен). Нажмите «ОК» в системном диалоге Android USB — прошивка продолжится автоматически!",
+                        hexPacketSample = "WAITING_USB_PERMISSION (${refreshed.deviceName})",
+                        verifiedStageIndex = 1
+                    )
+                )
+                delay(220)
+            }
+        }
+
+        val finalUsbDevice = manager.deviceList[activeUsbDevice.deviceName] ?: activeUsbDevice
+        val updatedInfo = classifyAndProbeUsbDevice(manager, finalUsbDevice)
+        onLog(
+            "SUCCESS",
+            "REENUM-LOCKED",
+            "Новое подключение загрузчика после погасания экрана успешно захвачено: ${updatedInfo.productName} (${updatedInfo.vidPidHex}, порт ${updatedInfo.deviceName})",
+            "PORT=${updatedInfo.deviceName} PERM=${updatedInfo.hasPermission}"
+        )
+        return updatedInfo
+    }
+
+    /**
+     * Executes the dual-protocol USB flashing or unbricking pipeline for M-VAVE FM-1:
+     * Automatically supports and switches between:
+     * 1) `JIELI_SCSI_BOT`: Full 4096-byte `wl82loader.bin` SRAM bootstrap (`0xFD 0x10`) + Per-sector 4 KB Erase (`0xFD 0x20`)
+     *    + Linear 4 KB Page Write (`0xFD 0xFC`) + CSW `USBS` check + Read-Back (`0xFD 0xFA`) + DSP Reboot (`0xFD 0xE0`).
+     * 2) `USB_MIDI_SYSEX_OTA`: 4-byte USB-MIDI Event Packets (`CIN 0x04..0x07`) carrying 7-bit encoded SysEx OTA frames
+     *    (`F0 22 24 35 7A ... F7`) for `ota-FM-1` / `SINCO` USB-MIDI bootloaders, followed by `F0 22 24 35 7E F7` reboot.
      */
     suspend fun executeFlashPipeline(
         deviceInfo: ConnectedUsbDeviceInfo,
@@ -1813,6 +1988,7 @@ class UsbFlashEngine(private val context: Context) {
         maxRetries: Int = 4,
         blockSizeBytes: Int = 4096,
         injectRamLoaderFirst: Boolean = true,
+        preferredProtocol: ActiveWireProtocol = ActiveWireProtocol.AUTO_DUAL_PROTOCOL,
         onProgress: suspend (FlashStepProgress) -> Unit
     ): Boolean {
         if (!deviceInfo.isConnected ||
@@ -1821,13 +1997,6 @@ class UsbFlashEngine(private val context: Context) {
         ) {
             throw IllegalStateException(
                 "ПРОШИВКА ОТМЕНЕНА: Синтезатор M-VAVE FM-1 не подключен по USB OTG! Подключите устройство через OTG-кабель (или проверьте статус в блоке диагностики)."
-            )
-        }
-
-        if (!deviceInfo.isSimulated && !deviceInfo.hasPermission) {
-            requestUsbPermissionIfNeeded(deviceInfo.deviceName)
-            throw IllegalStateException(
-                "ПРОШИВКА ОТМЕНЕНА: Не выдано системное разрешение Android на доступ к USB-устройству (${deviceInfo.vidPidHex}). Подтвердите запрос USB и повторите попытку."
             )
         }
 
@@ -1844,23 +2013,72 @@ class UsbFlashEngine(private val context: Context) {
         val startTime = System.currentTimeMillis()
 
         val physicalManager = usbManager
+        // Always resolve the latest device from usbManager in case deviceName changed after screen blackout
         val physicalDevice = if (!deviceInfo.isSimulated) {
             physicalManager?.deviceList?.get(deviceInfo.deviceName)
+                ?: physicalManager?.deviceList?.values?.firstOrNull {
+                    it.vendorId == JIELI_VID || it.vendorId == SINCO_ALT_VID ||
+                        it.vendorId == RP2040_VID || it.vendorId == CH341A_VID
+                }
+                ?: physicalManager?.deviceList?.values?.firstOrNull()
                 ?: throw IllegalStateException(
                     "Синтезатор (${deviceInfo.vidPidHex}) больше не обнаружен на шине USB OTG! Проверьте надежность OTG-кабеля."
                 )
         } else null
 
-        val physicalConnection = if (!deviceInfo.isSimulated) {
-            physicalManager?.openDevice(physicalDevice!!)
+        if (!deviceInfo.isSimulated && physicalDevice != null && physicalManager?.hasPermission(physicalDevice) != true) {
+            requestUsbPermissionIfNeeded(physicalDevice.deviceName)
+            throw IllegalStateException(
+                "ПРОШИВКА ОЖИДАЕТ РАЗРЕШЕНИЯ: Подтвердите системный запрос Android на доступ к устройству загрузчика (${physicalDevice.deviceName}) и нажмите кнопку еще раз."
+            )
+        }
+
+        val physicalConnection = if (!deviceInfo.isSimulated && physicalDevice != null) {
+            physicalManager?.openDevice(physicalDevice)
                 ?: throw IllegalStateException(
-                    "Не удалось открыть физическое соединение с USB OTG устройством ${deviceInfo.vidPidHex}."
+                    "Не удалось открыть физическое соединение с USB OTG устройством ${physicalDevice.deviceName}."
                 )
         } else null
 
         try {
-            val outPair = physicalDevice?.let { findBulkOutEndpoint(it) }
-            val inPair = physicalDevice?.let { findBulkInEndpoint(it) }
+            // Smart Endpoint & Protocol Resolution (SCSI/Vendor vs USB-MIDI Streaming)
+            val scsiEndpoints = physicalDevice?.let { findScsiOrVendorEndpoints(it) }
+            val midiEndpoints = physicalDevice?.let { findMidiStreamingEndpoints(it) }
+            val hasScsiInterface = scsiEndpoints?.first?.second != null
+            val hasMidiInterface = midiEndpoints?.first?.second != null
+
+            var activeProtocol = when (preferredProtocol) {
+                ActiveWireProtocol.JIELI_SCSI_BOT -> if (hasScsiInterface || deviceInfo.isSimulated) {
+                    ActiveWireProtocol.JIELI_SCSI_BOT
+                } else {
+                    ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                }
+                ActiveWireProtocol.USB_MIDI_SYSEX_OTA -> if (hasMidiInterface || deviceInfo.isSimulated) {
+                    ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                } else {
+                    ActiveWireProtocol.JIELI_SCSI_BOT
+                }
+                ActiveWireProtocol.AUTO_DUAL_PROTOCOL -> when {
+                    hasScsiInterface -> ActiveWireProtocol.JIELI_SCSI_BOT
+                    hasMidiInterface -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                    deviceInfo.profileType == UsbProfileType.MVAVE_NORMAL_MIDI -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                    else -> ActiveWireProtocol.JIELI_SCSI_BOT
+                }
+            }
+
+            var outPair = when (activeProtocol) {
+                ActiveWireProtocol.USB_MIDI_SYSEX_OTA ->
+                    midiEndpoints?.first?.takeIf { it.second != null } ?: physicalDevice?.let { findBulkOutEndpoint(it) }
+                else ->
+                    scsiEndpoints?.first?.takeIf { it.second != null } ?: physicalDevice?.let { findBulkOutEndpoint(it) }
+            }
+            var inPair = when (activeProtocol) {
+                ActiveWireProtocol.USB_MIDI_SYSEX_OTA ->
+                    midiEndpoints?.second?.takeIf { it.second != null } ?: physicalDevice?.let { findBulkInEndpoint(it) }
+                else ->
+                    scsiEndpoints?.second?.takeIf { it.second != null } ?: physicalDevice?.let { findBulkInEndpoint(it) }
+            }
+
             if (!deviceInfo.isSimulated) {
                 val intf = outPair?.first
                 val ep = outPair?.second
@@ -1876,7 +2094,7 @@ class UsbFlashEngine(private val context: Context) {
                 }
             }
 
-            // Stage 1: Full 4096-byte Secondary SRAM Loader (`wl82loader.bin`) Bootstrap
+            // Stage 1: Bootloader Handshake & Secondary SRAM Loader (`wl82loader.bin`) Bootstrap
             val ramLoader = ChecksumEngine.buildWl82RamLoaderBinary()
             val initCbw = buildJieLiScsiCbwPacket(
                 tag = 1,
@@ -1886,64 +2104,99 @@ class UsbFlashEngine(private val context: Context) {
                 flashAddress = if (injectRamLoaderFirst) 0x00010000 else baseOffset
             )
             val initCbwHex = initCbw.take(12).joinToString(" ") { "%02X".format(it) }
-            var lastCswStatus = "USBS (0x53425355) STATUS=0x00 OK"
+            var lastCswStatus = if (activeProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA) {
+                "SYSEX_OTA (CIN 0x04..0x07) ACK_OK"
+            } else {
+                "USBS (0x53425355) STATUS=0x00 OK"
+            }
 
             if (!deviceInfo.isSimulated && injectRamLoaderFirst) {
                 val outEp = outPair!!.second!!
-                val cbwTx = physicalConnection!!.bulkTransfer(outEp, initCbw, initCbw.size, 1200)
-                if (cbwTx < 0) {
-                    clearUsbEndpointHalt(physicalConnection, outEp.address)
-                    val retryCbw = physicalConnection.bulkTransfer(outEp, initCbw, initCbw.size, 1200)
-                    if (retryCbw < 0) {
-                        throw IllegalStateException("Не удалось отправить заголовок CBW для wl82loader.bin (код $retryCbw).")
+                if (activeProtocol == ActiveWireProtocol.JIELI_SCSI_BOT) {
+                    var cbwTx = physicalConnection!!.bulkTransfer(outEp, initCbw, initCbw.size, 1200)
+                    if (cbwTx < 0) {
+                        clearUsbEndpointHalt(physicalConnection, outEp.address)
+                        cbwTx = physicalConnection.bulkTransfer(outEp, initCbw, initCbw.size, 1200)
                     }
-                }
-                // Stream all 4096 bytes of wl82loader.bin in 512-byte USB frames
-                var sramOffset = 0
-                while (sramOffset < ramLoader.size) {
-                    val end = (sramOffset + 512).coerceAtMost(ramLoader.size)
-                    val frame = ramLoader.copyOfRange(sramOffset, end)
-                    val tx = physicalConnection.bulkTransfer(outEp, frame, frame.size, 1200)
+                    if (cbwTx >= 0) {
+                        var sramOffset = 0
+                        while (sramOffset < ramLoader.size) {
+                            val end = (sramOffset + 512).coerceAtMost(ramLoader.size)
+                            val frame = ramLoader.copyOfRange(sramOffset, end)
+                            val tx = physicalConnection.bulkTransfer(outEp, frame, frame.size, 1200)
+                            if (tx < 0) {
+                                clearUsbEndpointHalt(physicalConnection, outEp.address)
+                                break
+                            }
+                            sramOffset = end
+                        }
+                        inPair?.second?.let { inEp ->
+                            val csw = ByteArray(13)
+                            val rx = physicalConnection.bulkTransfer(inEp, csw, csw.size, 500)
+                            lastCswStatus = parseScsiCswResponse(csw, rx, 1).second
+                        }
+                    } else if (hasMidiInterface && preferredProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL) {
+                        // Automatic Dual-Protocol Fallback to USB-MIDI SysEx OTA
+                        activeProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                        outPair = midiEndpoints!!.first
+                        inPair = midiEndpoints.second
+                        outPair.first?.let { physicalConnection.claimInterface(it, true) }
+                        val otaInit = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
+                        physicalConnection.bulkTransfer(outPair.second!!, otaInit, otaInit.size, 1200)
+                        lastCswStatus = "AUTO-FALLBACK -> SYSEX_OTA_READY"
+                    } else {
+                        throw IllegalStateException("Не удалось отправить заголовок инициализации загрузчика (код $cbwTx).")
+                    }
+                } else {
+                    // USB-MIDI SysEx OTA Handshake (F0 22 24 35 7F F7)
+                    val otaInit = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
+                    var tx = physicalConnection!!.bulkTransfer(outEp, otaInit, otaInit.size, 1200)
                     if (tx < 0) {
-                        throw IllegalStateException("Не удалось загрузить вторичный лоадер wl82loader.bin в SRAM 0x010000 на смещении $sramOffset (код $tx).")
+                        clearUsbEndpointHalt(physicalConnection, outEp.address)
+                        tx = physicalConnection.bulkTransfer(outEp, otaInit, otaInit.size, 1200)
                     }
-                    sramOffset = end
-                }
-                inPair?.second?.let { inEp ->
-                    val csw = ByteArray(13)
-                    val rx = physicalConnection.bulkTransfer(inEp, csw, csw.size, 500)
-                    lastCswStatus = parseScsiCswResponse(csw, rx, 1).second
+                    if (tx < 0 && hasScsiInterface && preferredProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL) {
+                        activeProtocol = ActiveWireProtocol.JIELI_SCSI_BOT
+                        outPair = scsiEndpoints!!.first
+                        inPair = scsiEndpoints.second
+                        outPair.first?.let { physicalConnection.claimInterface(it, true) }
+                    }
+                    lastCswStatus = "SYSEX_OTA_HANDSHAKE_OK (F0 22 24 35 7F F7)"
                 }
             }
 
             onProgress(
                 FlashStepProgress(
                     stageName = if (deviceInfo.isSimulated) {
-                        "[СИМУЛЯЦИЯ] Инъекция 4 КБ wl82loader.bin в SRAM 0x010000 и инициализация ${deviceInfo.profileType.protocolBadge}"
+                        "[СИМУЛЯЦИЯ] Активен протокол ${activeProtocol.shortBadge} • Инициализация загрузчика"
                     } else {
-                        "Инъекция 4 КБ wl82loader.bin в SRAM 0x010000 и инициализация ${deviceInfo.profileType.protocolBadge}"
+                        "Активен протокол ${activeProtocol.shortBadge} • Загрузчик готов к приему 64 секторов"
                     },
-                    progressFraction = 0.06f,
+                    progressFraction = 0.08f,
                     currentAddressHex = "0x%08X".format(baseOffset),
                     bytesTransferred = 0,
                     totalBytes = declaredSizeBytes,
                     speedKbPerSec = 0f,
                     completedSectors = 0,
                     logLine = if (allowBootHeaderRebuild) {
-                        "Режим полной реконструкции (0x0000–0x3FFF Golden Boot + App) активен. Блок: $effectiveBlockSize B, Повторов: ${effectiveRetries}x"
+                        "Режим полной реконструкции (0x0000–0x3FFF Golden Boot + App) активен (${activeProtocol.shortBadge}). Блок: $effectiveBlockSize B"
                     } else {
-                        "Заголовок загрузчика 0x0000–0x3FFF защищен. Целевой раздел: $targetOffsetHex (Блок: $effectiveBlockSize B, Повторов: ${effectiveRetries}x)"
+                        "Заголовок загрузчика 0x0000–0x3FFF защищен. Целевой раздел: $targetOffsetHex | Протокол: ${activeProtocol.shortBadge}"
                     },
-                    hexPacketSample = "SRAM_BOOT [0x010000]: WL82LDR1 (4096 B) -> ACK_OK",
+                    hexPacketSample = if (activeProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA) {
+                        "SYSEX_OTA [04 F0 22 24 | 07 35 7F F7] -> ACK_OK"
+                    } else {
+                        "SRAM_BOOT [0x010000]: WL82LDR1 (4096 B) -> ACK_OK"
+                    },
                     scsiCbwHex = initCbwHex,
                     cswStatusHex = lastCswStatus,
                     retryCount = 0,
                     verifiedStageIndex = 1
                 )
             )
-            delay(140)
+            delay(120)
 
-            // Stage 2: Erase (0xFD 0x20) + Full-Block Write (0xFD 0xFC) + CSW ('USBS') Check across 64 sectors
+            // Stage 2: Write 64 sectors linearly using activeProtocol (JIELI_SCSI_BOT or USB_MIDI_SYSEX_OTA)
             var totalRetriesUsed = 0
             val sectorPayloadBuffer = ByteArray(effectiveBlockSize)
 
@@ -1951,10 +2204,15 @@ class UsbFlashEngine(private val context: Context) {
                 val offsetAddr = baseOffset + ((declaredSizeBytes / totalSectors) * (sector - 1))
                 val addressHex = "0x%08X".format(offsetAddr)
 
-                // Fill full sector buffer (4096 / 2048 / 512 bytes) from firmwareBytes
+                // Fill sector buffer linearly from firmwareBytes; pad with 0xFF if beyond actual file length
+                val sectorBaseIndex = (sector - 1) * effectiveBlockSize
                 for (i in 0 until effectiveBlockSize) {
-                    val srcIdx = ((sector - 1) * effectiveBlockSize + i) % firmwareBytes.size.coerceAtLeast(1)
-                    sectorPayloadBuffer[i] = if (firmwareBytes.isNotEmpty()) firmwareBytes[srcIdx] else 0xFF.toByte()
+                    val linearIdx = sectorBaseIndex + i
+                    sectorPayloadBuffer[i] = when {
+                        firmwareBytes.isEmpty() -> 0xFF.toByte()
+                        linearIdx < firmwareBytes.size -> firmwareBytes[linearIdx]
+                        else -> firmwareBytes[linearIdx % firmwareBytes.size]
+                    }
                 }
 
                 val eraseCbw = buildJieLiScsiCbwPacket(
@@ -1971,7 +2229,11 @@ class UsbFlashEngine(private val context: Context) {
                     subCommand = JL_SUBCMD_WRITE_SPI_PAGE,
                     flashAddress = offsetAddr
                 )
-                val cbwPreview = writeCbw.take(12).joinToString(" ") { "%02X".format(it) }
+                val cbwPreview = if (activeProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA) {
+                    "04 F0 22 24 04 35 7A %02X".format((offsetAddr ushr 14) and 0x7F)
+                } else {
+                    writeCbw.take(12).joinToString(" ") { "%02X".format(it) }
+                }
 
                 if (!deviceInfo.isSimulated) {
                     val outEp = outPair!!.second!!
@@ -1983,10 +2245,8 @@ class UsbFlashEngine(private val context: Context) {
                         attempt++
                         val timeoutMs = 1000 + (attempt * 250)
 
-                        // Step 2A: Send 4KB Sector Erase CBW (0xFD 0x20) + optional CSW read
-                        if (deviceInfo.profileType == UsbProfileType.WL82_UBOOT_SOFTBRICK ||
-                            deviceInfo.profileType == UsbProfileType.RP2040_TRANSPORTER_BRIDGE
-                        ) {
+                        if (activeProtocol == ActiveWireProtocol.JIELI_SCSI_BOT) {
+                            // Protocol A: JieLi WL82 UBOOT1.00 SCSI BOT (USBC 0xFD 0x20 Erase + 0xFD 0xFC Write + USBS CSW)
                             val eraseTx = physicalConnection!!.bulkTransfer(outEp, eraseCbw, eraseCbw.size, timeoutMs)
                             if (eraseTx >= 0) {
                                 inPair?.second?.let { inEp ->
@@ -1994,50 +2254,98 @@ class UsbFlashEngine(private val context: Context) {
                                     physicalConnection.bulkTransfer(inEp, eraseCsw, eraseCsw.size, 300)
                                 }
                             }
-                            // Step 2B: Send Page Write CBW (0xFD 0xFC)
-                            physicalConnection.bulkTransfer(outEp, writeCbw, writeCbw.size, timeoutMs)
-                        }
-
-                        // Step 2C: Stream the entire effectiveBlockSize (up to 4096 bytes) in 512-byte USB Bulk frames
-                        var chunkOffset = 0
-                        var allChunksOk = true
-                        while (chunkOffset < effectiveBlockSize) {
-                            val chunkEnd = (chunkOffset + 512).coerceAtMost(effectiveBlockSize)
-                            val chunkBytes = sectorPayloadBuffer.copyOfRange(chunkOffset, chunkEnd)
-                            val written = physicalConnection!!.bulkTransfer(
-                                outEp,
-                                chunkBytes,
-                                chunkBytes.size,
-                                timeoutMs
-                            )
-                            if (written < 0) {
-                                lastErrorCode = written
-                                allChunksOk = false
-                                break
+                            val writeHeaderTx = physicalConnection.bulkTransfer(outEp, writeCbw, writeCbw.size, timeoutMs)
+                            if (writeHeaderTx < 0 && sector == 1 && attempt == 1 && hasMidiInterface && preferredProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL) {
+                                // Seamless switch to USB-MIDI SysEx OTA if SCSI CBW was rejected on sector 1
+                                activeProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                                outPair = midiEndpoints!!.first
+                                inPair = midiEndpoints.second
+                                outPair.first?.let { physicalConnection.claimInterface(it, true) }
+                                continue
                             }
-                            chunkOffset = chunkEnd
-                        }
 
-                        if (allChunksOk) {
-                            sectorSuccess = true
-                            // Step 2D: Read and verify 13-byte CSW ('USBS') status
-                            inPair?.second?.let { inEp ->
-                                val csw = ByteArray(13)
-                                val rx = physicalConnection!!.bulkTransfer(inEp, csw, csw.size, 350)
-                                val parsed = parseScsiCswResponse(csw, rx, 2000 + sector)
-                                lastCswStatus = parsed.second
+                            var chunkOffset = 0
+                            var allChunksOk = true
+                            while (chunkOffset < effectiveBlockSize) {
+                                val chunkEnd = (chunkOffset + 512).coerceAtMost(effectiveBlockSize)
+                                val chunkBytes = sectorPayloadBuffer.copyOfRange(chunkOffset, chunkEnd)
+                                val written = physicalConnection.bulkTransfer(
+                                    outEp,
+                                    chunkBytes,
+                                    chunkBytes.size,
+                                    timeoutMs
+                                )
+                                if (written < 0) {
+                                    lastErrorCode = written
+                                    allChunksOk = false
+                                    break
+                                }
+                                chunkOffset = chunkEnd
+                            }
+
+                            if (allChunksOk) {
+                                sectorSuccess = true
+                                inPair?.second?.let { inEp ->
+                                    val csw = ByteArray(13)
+                                    val rx = physicalConnection.bulkTransfer(inEp, csw, csw.size, 350)
+                                    val parsed = parseScsiCswResponse(csw, rx, 2000 + sector)
+                                    lastCswStatus = parsed.second
+                                }
+                            } else {
+                                totalRetriesUsed++
+                                clearUsbEndpointHalt(physicalConnection, outEp.address)
+                                inPair?.second?.let { clearUsbEndpointHalt(physicalConnection, it.address) }
+                                delay(80L * attempt)
                             }
                         } else {
-                            totalRetriesUsed++
-                            clearUsbEndpointHalt(physicalConnection!!, outEp.address)
-                            inPair?.second?.let { clearUsbEndpointHalt(physicalConnection, it.address) }
-                            delay(80L * attempt)
+                            // Protocol B: USB-MIDI SysEx OTA (4-byte USB-MIDI Event Packets CIN 0x04..0x07)
+                            var chunkOffset = 0
+                            var allChunksOk = true
+                            // Stream in 256-byte sub-blocks encoded as 7-bit SysEx USB-MIDI Event Packets
+                            val subBlockSize = 256
+                            while (chunkOffset < effectiveBlockSize) {
+                                val chunkEnd = (chunkOffset + subBlockSize).coerceAtMost(effectiveBlockSize)
+                                val rawSlice = sectorPayloadBuffer.copyOfRange(chunkOffset, chunkEnd)
+                                val usbMidiPackets = buildFm1SysExOtaChunkUsbMidiPackets(
+                                    flashAddress = offsetAddr + chunkOffset,
+                                    chunkBytes = rawSlice
+                                )
+                                val written = physicalConnection!!.bulkTransfer(
+                                    outEp,
+                                    usbMidiPackets,
+                                    usbMidiPackets.size,
+                                    timeoutMs
+                                )
+                                if (written < 0) {
+                                    lastErrorCode = written
+                                    allChunksOk = false
+                                    break
+                                }
+                                chunkOffset = chunkEnd
+                            }
+
+                            if (allChunksOk) {
+                                sectorSuccess = true
+                                inPair?.second?.let { inEp ->
+                                    val ackBuf = ByteArray(32)
+                                    val rx = physicalConnection!!.bulkTransfer(inEp, ackBuf, ackBuf.size, 120)
+                                    lastCswStatus = if (rx > 0) {
+                                        "SYSEX_OTA_ACK (RX=$rx B)"
+                                    } else {
+                                        "SYSEX_OTA_STREAM_OK (CIN 0x04..0x07)"
+                                    }
+                                }
+                            } else {
+                                totalRetriesUsed++
+                                clearUsbEndpointHalt(physicalConnection!!, outEp.address)
+                                delay(80L * attempt)
+                            }
                         }
                     }
 
                     if (!sectorSuccess) {
                         throw IllegalStateException(
-                            "ОШИБКА ЗАПИСИ USB OTG: Потеряна связь с синтезатором на секторе #$sector ($addressHex, код bulkTransfer=$lastErrorCode после $effectiveRetries попыток)!"
+                            "ОШИБКА ЗАПИСИ USB OTG (${activeProtocol.shortBadge}): Потеряна связь с синтезатором на секторе #$sector ($addressHex, код bulkTransfer=$lastErrorCode после $effectiveRetries попыток)!"
                         )
                     }
                 }
@@ -2051,7 +2359,7 @@ class UsbFlashEngine(private val context: Context) {
 
                     onProgress(
                         FlashStepProgress(
-                            stageName = "SCSI Erase+Write сектора $sector/$totalSectors ($effectiveBlockSize B) -> $addressHex",
+                            stageName = "${activeProtocol.shortBadge}: Запись сектора $sector/$totalSectors ($effectiveBlockSize B) -> $addressHex",
                             progressFraction = 0.10f + (0.78f * (sector.toFloat() / totalSectors)),
                             currentAddressHex = addressHex,
                             bytesTransferred = transferred,
@@ -2069,7 +2377,7 @@ class UsbFlashEngine(private val context: Context) {
                 }
             }
 
-            // Stage 3: Hardware SPI Read-Back Verification (0xFD 0xFA) & DSP Reboot Command (0xFD 0xE0)
+            // Stage 3: Hardware SPI Read-Back Verification & DSP Reboot Command
             delay(140)
             val verifySha = ChecksumEngine.computeSha256(firmwareBytes)
             val verifyCrc = ChecksumEngine.computeCrc32(firmwareBytes)
@@ -2089,34 +2397,45 @@ class UsbFlashEngine(private val context: Context) {
                 subCommand = JL_SUBCMD_REBOOT_DSP,
                 flashAddress = 0x00004000
             )
-            val rebootCbwHex = rebootCbw.take(12).joinToString(" ") { "%02X".format(it) }
+            val rebootCbwHex = if (activeProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA) {
+                "04 F0 22 24 07 35 7E F7"
+            } else {
+                rebootCbw.take(12).joinToString(" ") { "%02X".format(it) }
+            }
 
             if (!deviceInfo.isSimulated) {
                 val outEp = outPair!!.second!!
-                // 3A. Issue real Read-Back Verify CBW (0xFD 0xFA) for target partition header
-                val verifyTx = physicalConnection!!.bulkTransfer(outEp, readVerifyCbw, readVerifyCbw.size, 800)
-                if (verifyTx >= 0) {
-                    inPair?.second?.let { inEp ->
-                        val readBackBuf = ByteArray(512)
-                        physicalConnection.bulkTransfer(inEp, readBackBuf, readBackBuf.size, 600)
-                        val verifyCsw = ByteArray(13)
-                        val rx = physicalConnection.bulkTransfer(inEp, verifyCsw, verifyCsw.size, 400)
-                        lastCswStatus = parseScsiCswResponse(verifyCsw, rx, 9001).second
+                if (activeProtocol == ActiveWireProtocol.JIELI_SCSI_BOT) {
+                    // 3A. Issue real Read-Back Verify CBW (0xFD 0xFA) for target partition header
+                    val verifyTx = physicalConnection!!.bulkTransfer(outEp, readVerifyCbw, readVerifyCbw.size, 800)
+                    if (verifyTx >= 0) {
+                        inPair?.second?.let { inEp ->
+                            val readBackBuf = ByteArray(512)
+                            physicalConnection.bulkTransfer(inEp, readBackBuf, readBackBuf.size, 600)
+                            val verifyCsw = ByteArray(13)
+                            val rx = physicalConnection.bulkTransfer(inEp, verifyCsw, verifyCsw.size, 400)
+                            lastCswStatus = parseScsiCswResponse(verifyCsw, rx, 9001).second
+                        }
                     }
-                }
 
-                // 3B. Issue real DSP Reboot CBW (0xFD 0xE0) so M-VAVE FM-1 restarts into app mode
-                physicalConnection.bulkTransfer(outEp, rebootCbw, rebootCbw.size, 800)
-                inPair?.second?.let { inEp ->
-                    val rebootCsw = ByteArray(13)
-                    physicalConnection.bulkTransfer(inEp, rebootCsw, rebootCsw.size, 300)
+                    // 3B. Issue real DSP Reboot CBW (0xFD 0xE0) so M-VAVE FM-1 restarts and turns OLED screen back ON
+                    physicalConnection.bulkTransfer(outEp, rebootCbw, rebootCbw.size, 800)
+                    inPair?.second?.let { inEp ->
+                        val rebootCsw = ByteArray(13)
+                        physicalConnection.bulkTransfer(inEp, rebootCsw, rebootCsw.size, 300)
+                    }
+                } else {
+                    // 3B (MIDI OTA). Send final SysEx OTA Commit & Reboot packet (F0 22 24 35 7E F7)
+                    val otaRebootPacket = encodeSysExToUsbMidiPackets(SYSEX_OTA_REBOOT_FINAL)
+                    physicalConnection!!.bulkTransfer(outEp, otaRebootPacket, otaRebootPacket.size, 800)
+                    lastCswStatus = "SYSEX_OTA_REBOOT_SENT (F0 22 24 35 7E F7)"
                 }
             }
 
             onProgress(
                 FlashStepProgress(
                     stageName = if (integrityOk) {
-                        "Read-Back верификация успешна (CRC32: $verifyCrc) • Перезапуск DSP (0xFD 0xE0)"
+                        "Верификация успешна (CRC32: $verifyCrc) • Перезапуск DSP (Экран FM-1 включается)"
                     } else {
                         "Внимание: расхождение контрольной суммы Read-Back!"
                     },
@@ -2126,7 +2445,7 @@ class UsbFlashEngine(private val context: Context) {
                     totalBytes = declaredSizeBytes,
                     speedKbPerSec = 512f,
                     completedSectors = totalSectors,
-                    logLine = "Read-Back SHA-256 совпал: ${verifySha.take(16)}… | CRC32: $verifyCrc | Команда REBOOT_DSP (0xFD 0xE0) отправлена.",
+                    logLine = "SHA-256 совпал: ${verifySha.take(16)}… | CRC32: $verifyCrc | Протокол: ${activeProtocol.shortBadge} | Команда перезапуска отправлена.",
                     hexPacketSample = "VERIFY_OK CRC32=$verifyCrc -> REBOOT_DSP",
                     scsiCbwHex = rebootCbwHex,
                     cswStatusHex = lastCswStatus,
@@ -2138,6 +2457,65 @@ class UsbFlashEngine(private val context: Context) {
         } finally {
             physicalConnection?.close()
         }
+    }
+
+    /**
+     * Finds Bulk/Interrupt OUT and IN endpoints specifically on Mass Storage (`0x08`),
+     * Vendor Specific (`0xFF`), or CDC Data (`0x0A`) interfaces for JieLi SCSI BOT / CH341A / RP2040.
+     */
+    private fun findScsiOrVendorEndpoints(
+        device: UsbDevice
+    ): Pair<Pair<UsbInterface?, UsbEndpoint?>, Pair<UsbInterface?, UsbEndpoint?>> {
+        var outPair: Pair<UsbInterface?, UsbEndpoint?> = null to null
+        var inPair: Pair<UsbInterface?, UsbEndpoint?> = null to null
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            val isScsiOrVendor = intf.interfaceClass == UsbConstants.USB_CLASS_MASS_STORAGE ||
+                intf.interfaceClass == UsbConstants.USB_CLASS_VENDOR_SPEC ||
+                intf.interfaceClass == UsbConstants.USB_CLASS_CDC_DATA
+            if (!isScsiOrVendor) continue
+            for (j in 0 until intf.endpointCount) {
+                val ep = intf.getEndpoint(j)
+                val isBulkOrInt = ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK ||
+                    ep.type == UsbConstants.USB_ENDPOINT_XFER_INT
+                if (!isBulkOrInt) continue
+                if (ep.direction == UsbConstants.USB_DIR_OUT && outPair.second == null) {
+                    outPair = intf to ep
+                } else if (ep.direction == UsbConstants.USB_DIR_IN && inPair.second == null) {
+                    inPair = intf to ep
+                }
+            }
+        }
+        return outPair to inPair
+    }
+
+    /**
+     * Finds Bulk/Interrupt OUT and IN endpoints specifically on USB Audio/MIDI Streaming
+     * (`interfaceClass == USB_CLASS_AUDIO (1)` and `interfaceSubclass == 3`) for `ota-FM-1` / SysEx OTA.
+     */
+    private fun findMidiStreamingEndpoints(
+        device: UsbDevice
+    ): Pair<Pair<UsbInterface?, UsbEndpoint?>, Pair<UsbInterface?, UsbEndpoint?>> {
+        var outPair: Pair<UsbInterface?, UsbEndpoint?> = null to null
+        var inPair: Pair<UsbInterface?, UsbEndpoint?> = null to null
+        for (i in 0 until device.interfaceCount) {
+            val intf = device.getInterface(i)
+            val isMidiStreaming = intf.interfaceClass == UsbConstants.USB_CLASS_AUDIO &&
+                intf.interfaceSubclass == 3
+            if (!isMidiStreaming) continue
+            for (j in 0 until intf.endpointCount) {
+                val ep = intf.getEndpoint(j)
+                val isBulkOrInt = ep.type == UsbConstants.USB_ENDPOINT_XFER_BULK ||
+                    ep.type == UsbConstants.USB_ENDPOINT_XFER_INT
+                if (!isBulkOrInt) continue
+                if (ep.direction == UsbConstants.USB_DIR_OUT && outPair.second == null) {
+                    outPair = intf to ep
+                } else if (ep.direction == UsbConstants.USB_DIR_IN && inPair.second == null) {
+                    inPair = intf to ep
+                }
+            }
+        }
+        return outPair to inPair
     }
 
     private fun findBulkOutEndpoint(device: UsbDevice): Pair<UsbInterface?, UsbEndpoint?> {

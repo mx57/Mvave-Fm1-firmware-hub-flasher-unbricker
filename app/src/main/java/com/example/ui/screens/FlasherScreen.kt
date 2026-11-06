@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.FirmwareEntity
+import com.example.domain.ActiveWireProtocol
 import com.example.domain.ChecksumReport
 import com.example.domain.ConnectedUsbDeviceInfo
 import com.example.domain.DeviceDiagnosticVerdict
@@ -85,6 +86,7 @@ fun FlasherScreen(
     onOpenUnbricker: () -> Unit,
     onToggleAutoBackup: (Boolean) -> Unit,
     onToggleVerifyAfterFlash: (Boolean) -> Unit,
+    onSelectWireProtocol: (ActiveWireProtocol) -> Unit = {},
     onBackupNow: () -> Unit,
     onImportLocalFile: () -> Unit,
     onStartFlash: () -> Unit
@@ -595,6 +597,66 @@ fun FlasherScreen(
                             onCheckedChange = onToggleVerifyAfterFlash,
                             colors = SwitchDefaults.colors(checkedThumbColor = SynthPhosphor)
                         )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Wire Protocol Selector (Auto Dual Protocol: SysEx OTA + JieLi SCSI BOT)
+                    Text(
+                        text = "Протокол проводной записи (после погасания экрана FM-1):",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = SynthCyan
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ActiveWireProtocol.entries.forEach { proto ->
+                            val selected = flashState.activeWireProtocol == proto
+                            FilterChip(
+                                selected = selected,
+                                onClick = { onSelectWireProtocol(proto) },
+                                modifier = Modifier.testTag("flasher_proto_${proto.name.lowercase()}"),
+                                label = {
+                                    Text(
+                                        text = proto.title,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = SynthCyan.copy(alpha = 0.22f),
+                                    selectedLabelColor = SynthCyan
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Surface(
+                        color = SynthCyan.copy(alpha = 0.10f),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, SynthCyan.copy(alpha = 0.45f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "АВТО-ПЕРЕХВАТ ПОСЛЕ ПОГАСАНИЯ ЭКРАНА FM-1 АКТИВЕН",
+                                fontFamily = JetBrainsMonoFontFamily,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SynthCyan,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "Когда после F0 22 24 35 7D F7 экран FM-1 гаснет, чип меняет USB-адрес. Приложение автоматически ждет новое устройство (ota-FM-1 / WL82 UBOOT1.00), запрашивает права и продолжает запись (${flashState.activeWireProtocol.description}).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))

@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.FirmwareEntity
+import com.example.domain.ActiveWireProtocol
 import com.example.domain.ConnectedUsbDeviceInfo
 import com.example.domain.DeviceDiagnosticVerdict
 import com.example.domain.PcbHighlightZone
@@ -95,6 +96,7 @@ fun UnbrickerScreen(
     onSelectSimulatedProfile: (UsbProfileType) -> Unit,
     onSetHardBrickSuspected: (Boolean) -> Unit,
     onSelectUnbrickMethod: (UnbrickMethodType) -> Unit,
+    onSelectWireProtocol: (ActiveWireProtocol) -> Unit = {},
     onSelectPinShortVector: (SpiPinShortVector) -> Unit,
     onSetUnbrickUiMode: (UnbrickUiMode) -> Unit,
     onSelectTargetOption: (UnbrickTargetFirmwareOption) -> Unit,
@@ -159,11 +161,11 @@ fun UnbrickerScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = "Центр реанимации M-VAVE FM-1 (10 методов без пайки)",
+                                    text = "Центр реанимации M-VAVE FM-1 (6 проверенных методов)",
                                     style = MaterialTheme.typography.titleLarge
                                 )
                                 Text(
-                                    text = "SCSI UBOOT1.00 • VBUS Глитч • Control Reset EP0 • 3-Vector 25Q80 • Сброс АКБ • FWSC • RP2040 • CH341A",
+                                    text = "1. SysEx OTA + Авто-перехват • 2. SCSI UBOOT1.00 • 3. Сброс EP0 • 4. Замыкание 25Q80 • 5. Хирург .fwsc • 6. CH341A / RP2040",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -335,7 +337,7 @@ fun UnbrickerScreen(
                             )
                             Text(
                                 text = if (useSimulationMode) {
-                                    "Активен: доступны все 10 методов реанимации, тест шины OTG, сброс EP0, инъекция wl82loader и сборка 1 МБ дампа"
+                                    "Активен: доступны все 6 проверенных методов реанимации, тест шины OTG, сброс EP0, инъекция wl82loader и сборка 1 МБ дампа"
                                 } else {
                                     "Выключен (строгий режим реального USB OTG). Включите для проверки всех функций без железа"
                                 },
@@ -386,7 +388,7 @@ fun UnbrickerScreen(
             }
         }
 
-        // 2. Selector for all 10 Unbrick Methods + Expanded Engineering Description & Guides
+        // 2. Selector for all 6 Verified Unbrick Methods + Dual-Protocol Selector & Guides
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -395,7 +397,7 @@ fun UnbrickerScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Арсенал реанимации M-VAVE FM-1 (10 методов без паяльника):",
+                        text = "Проверенные методы реанимации M-VAVE FM-1 (6 рабочих USB-векторов):",
                         style = MaterialTheme.typography.titleMedium,
                         color = SynthCyan
                     )
@@ -575,6 +577,41 @@ fun UnbrickerScreen(
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Протокол записи после погасания экрана FM-1 (перехода в загрузчик):",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        ActiveWireProtocol.entries.forEach { proto ->
+                            val isSelected = flashState.activeWireProtocol == proto
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = { onSelectWireProtocol(proto) },
+                                modifier = Modifier.testTag("unbrick_proto_${proto.name.lowercase()}"),
+                                label = {
+                                    Text(
+                                        text = proto.title,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = SynthCyan.copy(alpha = 0.22f),
+                                    selectedLabelColor = SynthCyan
+                                )
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -592,44 +629,49 @@ fun UnbrickerScreen(
         // 4. Method-Specific Action & Hardware Tool Card
         item {
             when (activeMethod) {
-                UnbrickMethodType.SPI_PIN_SHORT_MASKROM,
-                UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER -> {
-                    SpiFlashPinoutCard(
-                        isPinShortMode = activeMethod == UnbrickMethodType.SPI_PIN_SHORT_MASKROM,
-                        selectedVector = flashState.selectedPinShortVector,
-                        isCatcherActive = flashState.isBootloopCatcherActive,
-                        catcherAttempts = flashState.bootloopCatcherAttempts,
-                        onSelectVector = onSelectPinShortVector,
-                        onToggleCatcher = onToggleBootloopCatcher,
-                        onExportFull1MbDump = onExportFull1MbDump
-                    )
-                }
-
-                UnbrickMethodType.USB_VBUS_GLITCH_HANDSHAKE,
                 UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER -> {
                     VbusGlitchAndBootloopCatcherCard(
-                        isVbusGlitchMode = activeMethod == UnbrickMethodType.USB_VBUS_GLITCH_HANDSHAKE,
+                        isVbusGlitchMode = false,
                         isCatcherActive = flashState.isBootloopCatcherActive,
                         catcherAttempts = flashState.bootloopCatcherAttempts,
                         onToggleCatcher = onToggleBootloopCatcher
                     )
                 }
 
-                UnbrickMethodType.USB_CONTROL_TRANSFER_RESET -> {
-                    ControlTransferResetCard(
-                        resetCompleted = flashState.controlTransferResetDone,
+                UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT -> {
+                    ScsiUbootProtocolCard(
+                        wl82LoaderInjected = flashState.wl82LoaderInjected,
                         isReadyToFlash = connectedDevice.isReadyToFlash,
                         isFlashing = flashState.isFlashing,
-                        onExecuteReset = onExecuteControlTransferReset
+                        onInjectWl82Loader = onInjectWl82LoaderNow
                     )
                 }
 
-                UnbrickMethodType.BROWNOUT_PMU_RELEASE -> {
-                    BrownoutPmuReleaseCard(
+                UnbrickMethodType.USB_CONTROL_TRANSFER_RESET -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ControlTransferResetCard(
+                            resetCompleted = flashState.controlTransferResetDone,
+                            isReadyToFlash = connectedDevice.isReadyToFlash,
+                            isFlashing = flashState.isFlashing,
+                            onExecuteReset = onExecuteControlTransferReset
+                        )
+                        UsbBusDiagnosticCard(
+                            report = flashState.lastBusDiagnosticReport,
+                            onRunAudit = onRunUsbBusAudit,
+                            onExecuteControlReset = onExecuteControlTransferReset
+                        )
+                    }
+                }
+
+                UnbrickMethodType.SPI_PIN_SHORT_MASKROM -> {
+                    SpiFlashPinoutCard(
+                        isPinShortMode = true,
+                        selectedVector = flashState.selectedPinShortVector,
                         isCatcherActive = flashState.isBootloopCatcherActive,
                         catcherAttempts = flashState.bootloopCatcherAttempts,
+                        onSelectVector = onSelectPinShortVector,
                         onToggleCatcher = onToggleBootloopCatcher,
-                        onRefreshUsb = onRefreshUsb
+                        onExportFull1MbDump = onExportFull1MbDump
                     )
                 }
 
@@ -645,28 +687,22 @@ fun UnbrickerScreen(
                     )
                 }
 
-                UnbrickMethodType.RP2040_TRANSPORTER_BRIDGE -> {
-                    Rp2040BridgeWizardCard(
-                        step = flashState.activeUnbrickStep,
-                        onSetWizardStep = onSetWizardStep
-                    )
-                }
-
-                UnbrickMethodType.USB_BUS_DIAGNOSTIC_ANALYZER -> {
-                    UsbBusDiagnosticCard(
-                        report = flashState.lastBusDiagnosticReport,
-                        onRunAudit = onRunUsbBusAudit,
-                        onExecuteControlReset = onExecuteControlTransferReset
-                    )
-                }
-
-                UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT -> {
-                    ScsiUbootProtocolCard(
-                        wl82LoaderInjected = flashState.wl82LoaderInjected,
-                        isReadyToFlash = connectedDevice.isReadyToFlash,
-                        isFlashing = flashState.isFlashing,
-                        onInjectWl82Loader = onInjectWl82LoaderNow
-                    )
+                UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        SpiFlashPinoutCard(
+                            isPinShortMode = false,
+                            selectedVector = flashState.selectedPinShortVector,
+                            isCatcherActive = flashState.isBootloopCatcherActive,
+                            catcherAttempts = flashState.bootloopCatcherAttempts,
+                            onSelectVector = onSelectPinShortVector,
+                            onToggleCatcher = onToggleBootloopCatcher,
+                            onExportFull1MbDump = onExportFull1MbDump
+                        )
+                        Rp2040BridgeWizardCard(
+                            step = flashState.activeUnbrickStep,
+                            onSetWizardStep = onSetWizardStep
+                        )
+                    }
                 }
             }
         }

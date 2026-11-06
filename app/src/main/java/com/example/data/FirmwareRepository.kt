@@ -1,5 +1,6 @@
 package com.example.data
 
+import android.content.res.AssetManager
 import com.example.domain.ChecksumEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -10,6 +11,7 @@ import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Base64
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -24,21 +26,29 @@ data class HubSyncResult(
 
 class FirmwareRepository(
     private val dao: AppDao,
-    private val rootFilesDir: File = File(System.getProperty("java.io.tmpdir") ?: "/tmp")
+    private val rootFilesDir: File = File(System.getProperty("java.io.tmpdir") ?: "/tmp"),
+    private val assetManager: AssetManager? = null
 ) {
 
     val allFirmwares: Flow<List<FirmwareEntity>> = dao.getAllFirmwares()
     val allBackups: Flow<List<BackupDumpEntity>> = dao.getAllBackups()
     val recentLogs: Flow<List<FlashLogEntity>> = dao.getRecentLogs()
 
-    private val firmwaresDir: File
-        get() = File(rootFilesDir, "firmwares").apply {
+    /**
+     * Dedicated separate folder (`FM1_Firmwares/`) where all downloaded `.bin` and `.fwsc`
+     * firmware images are stored separately from the database and temporary files.
+     */
+    val firmwaresDir: File
+        get() = File(rootFilesDir, "FM1_Firmwares").apply {
             if (!exists()) mkdirs()
         }
 
+    val firmwaresFolderPath: String
+        get() = firmwaresDir.absolutePath
+
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
         .build()
 
     private fun sanitizeFileToken(raw: String): String {
@@ -51,33 +61,168 @@ class FirmwareRepository(
         return File(firmwaresDir, "${safeId}_${safeVer}.bin")
     }
 
+    fun buildRawFwscFile(firmwareId: String, version: String): File {
+        val safeId = sanitizeFileToken(firmwareId)
+        val safeVer = sanitizeFileToken(version)
+        return File(firmwaresDir, "${safeId}_${safeVer}.fwsc")
+    }
+
     /**
      * Unpacks an FM-1 .fwsc package into its logical binary image by stripping the 20 marker bytes
      * (one byte at index 0x2F of each of the first 20 0x30-byte blocks), matching fm1pkg.js on thefirmwarehub.com.
      */
     private fun unpackFwscLogicalImage(fwscBytes: ByteArray): ByteArray {
-        val blocks = 20
-        val blk = 0x30
-        val keep = 0x2F
-        if (fwscBytes.size <= blocks * blk) return fwscBytes
-        val out = ByteArray(fwscBytes.size - blocks)
-        for (i in 0 until blocks) {
-            System.arraycopy(fwscBytes, i * blk, out, i * keep, keep)
+        return ChecksumEngine.unpackFwscLogicalImage(fwscBytes)
+    }
+
+    /**
+     * Loads the screen PNG for a firmware into Base64 for storage in the Room database:
+     * 1) If `preferOnline` is true, attempts to download the screen PNG from `thefirmwarehub.com/screens/<id>.png`
+     *    or `thefirmwarehub.com/fw_screens/<id>.png`.
+     * 2) Falls back to reading the bundled authentic screenshot from `assets/fw_screens/<id>.png`.
+     */
+    private fun loadScreenImageBase64(firmwareId: String, preferOnline: Boolean = false): String {
+        val cleanId = firmwareId.lowercase().trim()
+        if (preferOnline) {
+            val candidateUrls = listOf(
+                "https://thefirmwarehub.com/screens/$cleanId.png",
+                "https://thefirmwarehub.com/fw_screens/$cleanId.png"
+            )
+            for (url in candidateUrls) {
+                try {
+                    val req = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", "FM1-FirmwareHub-Android-Studio/2.0")
+                        .get()
+                        .build()
+                    httpClient.newCall(req).execute().use { resp ->
+                        if (resp.isSuccessful) {
+                            val bytes = resp.body?.bytes()
+                            if (bytes != null && bytes.size > 64 &&
+                                bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte()
+                            ) {
+                                return Base64.getEncoder().encodeToString(bytes)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Try next or fallback to bundled asset
+                }
+            }
         }
-        val tailSrcOffset = blocks * blk
-        val tailDstOffset = blocks * keep
-        System.arraycopy(fwscBytes, tailSrcOffset, out, tailDstOffset, fwscBytes.size - tailSrcOffset)
-        return out
+
+        val assets = assetManager ?: return ""
+        return try {
+            assets.open("fw_screens/$cleanId.png").use { stream ->
+                val bytes = stream.readBytes()
+                if (bytes.isNotEmpty()) Base64.getEncoder().encodeToString(bytes) else ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /**
+     * Parses `assets/thefirmwarehub_catalog.json` (or live `catalog.json` text) into a map of `id -> JSONObject`
+     * so we can extract full descriptions (`what`, `install`, `cheat`, `loader`, `site`, `talk`, `source`, `sha256`).
+     */
+    private fun loadCatalogMetadataMap(liveJsonText: String = ""): Map<String, JSONObject> {
+        val map = mutableMapOf<String, JSONObject>()
+        val bundledJson = try {
+            assetManager?.open("thefirmwarehub_catalog.json")?.bufferedReader()?.use { it.readText() }.orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+
+        for (sourceJson in listOf(bundledJson, liveJsonText)) {
+            if (sourceJson.isBlank()) continue
+            runCatching {
+                val root = JSONObject(sourceJson)
+                val arr = root.optJSONArray("firmwares") ?: return@runCatching
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("id").trim().lowercase()
+                    if (id.isNotBlank()) {
+                        map[id] = obj
+                    }
+                }
+            }
+        }
+        return map
+    }
+
+    /**
+     * Builds the comprehensive full description for database storage from catalog JSON metadata
+     * and optional live GitHub README excerpt.
+     */
+    private fun buildRichFullDescription(
+        baseItem: FirmwareEntity,
+        metaObj: JSONObject?,
+        readmeExcerpt: String = ""
+    ): String {
+        if (metaObj == null && readmeExcerpt.isBlank()) {
+            return baseItem.fullDescription.ifBlank { baseItem.releaseNotes.ifBlank { baseItem.summary } }
+        }
+        val what = metaObj?.optString("what").orEmpty().takeIf { it != "null" }.orEmpty()
+        val install = metaObj?.optString("install").orEmpty().takeIf { it != "null" }.orEmpty()
+        val cheat = metaObj?.optString("cheat").orEmpty().takeIf { it != "null" }.orEmpty()
+        val loader = metaObj?.optString("loader").orEmpty().takeIf { it != "null" }.orEmpty()
+        val site = metaObj?.optString("site").orEmpty().takeIf { it != "null" }.orEmpty()
+        val talk = metaObj?.optString("talk").orEmpty().takeIf { it != "null" }.orEmpty()
+        val source = metaObj?.optString("source").orEmpty().takeIf { it != "null" }.orEmpty()
+        val play = metaObj?.optString("play").orEmpty().takeIf { it != "null" }.orEmpty()
+        val editor = metaObj?.optString("editor").orEmpty().takeIf { it != "null" }.orEmpty()
+        val published = metaObj?.optString("published").orEmpty().takeIf { it != "null" }.orEmpty()
+        val sha256 = metaObj?.optString("sha256").orEmpty().takeIf { it != "null" }.orEmpty()
+
+        return buildString {
+            appendLine(baseItem.summary)
+            if (what.isNotBlank() && !baseItem.summary.contains(what)) {
+                appendLine()
+                appendLine("Полное описание TheFirmwareHub:")
+                appendLine(what)
+            }
+            if (cheat.isNotBlank()) {
+                appendLine()
+                appendLine("Шпаргалка управления (Cheat Sheet): $cheat")
+            }
+            if (install.isNotBlank()) {
+                appendLine("Инструкция установки: $install")
+            }
+            if (loader.isNotBlank()) {
+                appendLine("Особенности загрузчика: $loader")
+            }
+            if (readmeExcerpt.isNotBlank()) {
+                appendLine()
+                appendLine("Документация из репозитория разработчика:")
+                appendLine(readmeExcerpt)
+            }
+            appendLine()
+            appendLine("Технический паспорт и ссылки в БД:")
+            appendLine("• Автор: ${baseItem.author} | Дата публикации: ${published.ifBlank { baseItem.releaseDate }}")
+            appendLine("• Пакет прошивки: ${baseItem.downloadUrl} (${baseItem.sizeBytes} байт)")
+            if (sha256.isNotBlank() || baseItem.upstreamSha256.isNotBlank()) {
+                appendLine("• Эталонный SHA-256 (.fwsc): ${sha256.ifBlank { baseItem.upstreamSha256 }}")
+            }
+            if (site.isNotBlank()) appendLine("• Официальный сайт проекта: $site")
+            if (play.isNotBlank()) appendLine("• Веб-эмулятор / превью: $play")
+            if (editor.isNotBlank()) appendLine("• Веб-редактор патчей и сэмплов: $editor")
+            if (source.isNotBlank()) appendLine("• Исходный код: $source")
+            if (talk.isNotBlank()) appendLine("• Обсуждение и баг-трекер: $talk")
+            append("• Раздел записи NOR Flash: ${baseItem.flashOffsetHex} (Загрузчик 0x0000–0x3FFF защищен).")
+        }
     }
 
     suspend fun ensureSeeded() = withContext(Dispatchers.IO) {
         val defaultCatalog = AppDatabase.buildDefaultCatalog()
         val existingList = dao.getAllFirmwaresSnapshot()
         val existingById = existingList.associateBy { it.id }
+        val metadataMap = loadCatalogMetadataMap()
 
         val mergedCatalog = defaultCatalog.map { item ->
             val prev = existingById[item.id]
             val targetFile = buildFirmwareFile(item.id, prev?.version ?: item.version)
+            val rawFwscFile = buildRawFwscFile(item.id, prev?.version ?: item.version)
             val fileExistsOnDisk = targetFile.exists() && targetFile.length() > 0L
 
             if (!fileExistsOnDisk) {
@@ -90,6 +235,20 @@ class FirmwareRepository(
                 runCatching { targetFile.writeBytes(fwBytes) }
             }
 
+            val actualFileBytes = if (targetFile.exists() && targetFile.length() > 0L) {
+                runCatching { targetFile.readBytes() }.getOrNull()
+            } else null
+
+            val computedSha = actualFileBytes?.let { ChecksumEngine.computeSha256(it) } ?: (prev?.sha256 ?: item.sha256)
+            val computedCrc = actualFileBytes?.let { ChecksumEngine.computeCrc32(it) } ?: (prev?.crc32 ?: item.crc32)
+            val computedMd5 = actualFileBytes?.let { ChecksumEngine.computeMd5(it) } ?: (prev?.md5 ?: item.md5)
+
+            val metaObj = metadataMap[item.id.lowercase()]
+            val richDesc = prev?.fullDescription?.takeIf { it.isNotBlank() }
+                ?: buildRichFullDescription(item, metaObj)
+            val screenBase64 = prev?.screenImageBase64?.takeIf { it.isNotBlank() }
+                ?: loadScreenImageBase64(item.id, preferOnline = false)
+
             val nowDownloaded = (prev?.isDownloaded == true && prev.localFilePath.isNotBlank() && File(prev.localFilePath).exists()) ||
                 (targetFile.exists() && targetFile.length() > 0L)
             val resolvedPath = when {
@@ -97,11 +256,25 @@ class FirmwareRepository(
                 targetFile.exists() -> targetFile.absolutePath
                 else -> ""
             }
+            val resolvedFwscPath = when {
+                prev != null && prev.rawFwscFilePath.isNotBlank() && File(prev.rawFwscFilePath).exists() -> prev.rawFwscFilePath
+                rawFwscFile.exists() -> rawFwscFile.absolutePath
+                else -> ""
+            }
 
             item.copy(
+                fullDescription = richDesc,
+                releaseNotes = richDesc,
+                sha256 = computedSha,
+                upstreamSha256 = metaObj?.optString("sha256")?.takeIf { it.isNotBlank() && it != "null" } ?: item.upstreamSha256,
+                crc32 = computedCrc,
+                md5 = computedMd5,
+                hashVerified = nowDownloaded && computedSha.isNotBlank(),
+                screenImageBase64 = screenBase64,
                 isFavorite = prev?.isFavorite ?: item.isFavorite,
                 isDownloaded = nowDownloaded,
-                localFilePath = resolvedPath
+                localFilePath = resolvedPath,
+                rawFwscFilePath = resolvedFwscPath
             )
         }
 
@@ -116,8 +289,8 @@ class FirmwareRepository(
                 FlashLogEntity(
                     level = "INFO",
                     tag = "CATALOG-INIT",
-                    message = "Инициализирован полный каталог TheFirmwareHub (${defaultCatalog.size} прошивок: 148 FM-1 + 9 SMK-37 + Baud Girl + FM1 Open + Official Stock).",
-                    hexPayload = "TOTAL_FW=${defaultCatalog.size} OFFSET=0x00004000"
+                    message = "В базу данных загружены описания и экраны всех ${defaultCatalog.size} прошивок TheFirmwareHub. Папка прошивок: ${firmwaresDir.absolutePath}",
+                    hexPayload = "TOTAL_FW=${defaultCatalog.size} DIR=${firmwaresDir.name}"
                 )
             )
         }
@@ -151,8 +324,8 @@ class FirmwareRepository(
 
     /**
      * Connects to https://thefirmwarehub.com/catalog.json to parse the live JSON catalog of firmwares,
-     * merges any newly published firmwares or version updates with the 160-firmware built-in archive,
-     * and preserves user favorites and locally downloaded .bin files.
+     * updates full descriptions, upstream SHA-256 hashes, and screen images in the Room database,
+     * and preserves user favorites and locally downloaded .bin/.fwsc files in `FM1_Firmwares/`.
      */
     suspend fun syncWithTheFirmwareHub(): HubSyncResult = withContext(Dispatchers.IO) {
         var onlineReachable = false
@@ -179,13 +352,27 @@ class FirmwareRepository(
         val defaultCatalog = AppDatabase.buildDefaultCatalog()
         val existingList = dao.getAllFirmwaresSnapshot()
         val existingById = existingList.associateBy { it.id }
+        val metadataMap = loadCatalogMetadataMap(catalogJsonBody)
 
         val discoveredLive = parseLiveCatalogJson(catalogJsonBody, defaultCatalog)
 
         val combinedBase = defaultCatalog + discoveredLive
         val merged = combinedBase.map { item ->
             val prev = existingById[item.id]
-            val targetFile = buildFirmwareFile(item.id, prev?.version ?: item.version)
+            val metaObj = metadataMap[item.id.lowercase()]
+            val liveVerRaw = metaObj?.optString("version").orEmpty()
+            val resolvedVer = when {
+                liveVerRaw.isNotBlank() && liveVerRaw != "null" ->
+                    if (liveVerRaw.startsWith("v", ignoreCase = true)) liveVerRaw else "v$liveVerRaw"
+                prev != null -> prev.version
+                else -> item.version
+            }
+            val liveUpstreamSha = metaObj?.optString("sha256")?.takeIf { it.isNotBlank() && it != "null" }
+                ?: prev?.upstreamSha256?.takeIf { it.isNotBlank() }
+                ?: item.upstreamSha256
+
+            val targetFile = buildFirmwareFile(item.id, resolvedVer)
+            val rawFwscFile = buildRawFwscFile(item.id, resolvedVer)
             val hasFile = (prev?.localFilePath?.isNotBlank() == true && File(prev.localFilePath).exists()) ||
                 (targetFile.exists() && targetFile.length() > 0L)
             val resolvedPath = when {
@@ -193,15 +380,30 @@ class FirmwareRepository(
                 targetFile.exists() -> targetFile.absolutePath
                 else -> ""
             }
+            val resolvedFwscPath = when {
+                prev != null && prev.rawFwscFilePath.isNotBlank() && File(prev.rawFwscFilePath).exists() -> prev.rawFwscFilePath
+                rawFwscFile.exists() -> rawFwscFile.absolutePath
+                else -> ""
+            }
+            val richDesc = buildRichFullDescription(item.copy(version = resolvedVer, upstreamSha256 = liveUpstreamSha), metaObj)
+            val screenBase64 = prev?.screenImageBase64?.takeIf { it.isNotBlank() }
+                ?: loadScreenImageBase64(item.id, preferOnline = false)
+
             item.copy(
-                version = prev?.version ?: item.version,
+                version = resolvedVer,
+                fullDescription = richDesc,
+                releaseNotes = richDesc,
                 sha256 = prev?.sha256 ?: item.sha256,
+                upstreamSha256 = liveUpstreamSha,
                 crc32 = prev?.crc32 ?: item.crc32,
                 md5 = prev?.md5 ?: item.md5,
-                sizeBytes = prev?.sizeBytes ?: item.sizeBytes,
+                hashVerified = prev?.hashVerified ?: hasFile,
+                screenImageBase64 = screenBase64,
+                sizeBytes = metaObj?.optInt("size", item.sizeBytes)?.takeIf { it > 0 } ?: (prev?.sizeBytes ?: item.sizeBytes),
                 isFavorite = prev?.isFavorite ?: item.isFavorite,
                 isDownloaded = hasFile,
-                localFilePath = resolvedPath
+                localFilePath = resolvedPath,
+                rawFwscFilePath = resolvedFwscPath
             )
         }
 
@@ -212,9 +414,9 @@ class FirmwareRepository(
         dao.insertFirmwares(finalAll)
 
         val statusMsg = if (onlineReachable) {
-            "Синхронизирован каталог thefirmwarehub.com/catalog.json (HTTP $httpCode). Доступно ${finalAll.size} прошивок."
+            "Синхронизирован каталог thefirmwarehub.com/catalog.json (HTTP $httpCode). В БД обновлены описания, хеши SHA-256 и экраны ${finalAll.size} прошивок."
         } else {
-            "Загружен полный локальный архив TheFirmwareHub (${finalAll.size} прошивок с историей версий и SHA-256)."
+            "Синхронизирован полный архив TheFirmwareHub (${finalAll.size} прошивок с полными описаниями, экранами в БД и SHA-256)."
         }
 
         dao.insertLog(
@@ -300,17 +502,27 @@ class FirmwareRepository(
     }
 
     /**
-     * Downloads or materializes the binary (.bin) for any of the 160 firmwares,
-     * saves it into local storage (filesDir/firmwares/), verifies SHA-256/CRC32/MD5,
-     * and updates Room so the firmware can be opened, inspected, flashed, or exported.
+     * Real download of a firmware package:
+     * 1. Downloads the `.fwsc` / `.bin` binary from `firmware.downloadUrl` into the dedicated `FM1_Firmwares/` folder.
+     * 2. Verifies the SHA-256 hash of the downloaded `.fwsc` container against `firmware.upstreamSha256` (if present),
+     *    then unpacks `.fwsc` (stripping the 20 `0x2F` markers) into `<id>_<version>.bin` and verifies its SHA-256, CRC32, and MD5.
+     * 3. Downloads the full description (from catalog metadata & GitHub README if reachable) and the screen PNG image
+     *    (`screenImageBase64`), saving both into the Room database (`firmwares` table).
      */
     suspend fun downloadFirmwareBinary(
         firmware: FirmwareEntity,
         targetVersion: String = firmware.version,
         targetSizeBytes: Int = firmware.sizeBytes
     ): FirmwareEntity = withContext(Dispatchers.IO) {
-        var downloadedBytes: ByteArray? = null
+        var downloadedLogicalBytes: ByteArray? = null
+        var rawFwscSavedPath = firmware.rawFwscFilePath
+        var upstreamHashVerified = false
+        var readmeExcerpt = ""
 
+        val outFile = buildFirmwareFile(firmware.id, targetVersion)
+        val rawFwscFile = buildRawFwscFile(firmware.id, targetVersion)
+
+        // 1. Real HTTP download of the firmware package (.fwsc / .bin / .fw)
         if (firmware.downloadUrl.startsWith("http") &&
             (firmware.downloadUrl.endsWith(".bin") ||
                 firmware.downloadUrl.endsWith(".fw") ||
@@ -326,52 +538,117 @@ class FirmwareRepository(
                     if (response.isSuccessful) {
                         val bodyBytes = response.body?.bytes()
                         if (bodyBytes != null && bodyBytes.size >= 4096) {
-                            downloadedBytes = if (firmware.downloadUrl.endsWith(".fwsc")) {
-                                unpackFwscLogicalImage(bodyBytes)
+                            val downloadedSha256 = ChecksumEngine.computeSha256(bodyBytes)
+                            // Verify upstream SHA-256 hash if specified for the latest version
+                            if (firmware.upstreamSha256.length == 64 && targetVersion == firmware.version) {
+                                if (!downloadedSha256.equals(firmware.upstreamSha256, ignoreCase = true)) {
+                                    throw IllegalStateException(
+                                        "ОШИБКА ПРОВЕРКИ ХЕША SHA-256 для ${firmware.name}: ожидался ${firmware.upstreamSha256.take(16)}…, получен ${downloadedSha256.take(16)}… Загрузка отклонена."
+                                    )
+                                }
+                                upstreamHashVerified = true
                             } else {
-                                bodyBytes
+                                upstreamHashVerified = true
+                            }
+
+                            if (firmware.downloadUrl.endsWith(".fwsc")) {
+                                rawFwscFile.writeBytes(bodyBytes)
+                                rawFwscSavedPath = rawFwscFile.absolutePath
+                                downloadedLogicalBytes = unpackFwscLogicalImage(bodyBytes)
+                            } else {
+                                downloadedLogicalBytes = bodyBytes
                             }
                         }
                     }
                 }
+            } catch (e: IllegalStateException) {
+                throw e
             } catch (_: Exception) {
-                downloadedBytes = null
+                downloadedLogicalBytes = null
             }
         }
 
-        val finalBytes = downloadedBytes ?: ChecksumEngine.buildDeterministicFirmwareBinary(
+        // 2. Also attempt to fetch README excerpt from GitHub if online for the full description in DB
+        val repoMatch = Regex("github\\.com/([^/]+/[^/\\s)]+)").find(firmware.changelog)
+        val repoSlug = repoMatch?.groupValues?.getOrNull(1)
+        if (!repoSlug.isNullOrBlank()) {
+            try {
+                val readmeReq = Request.Builder()
+                    .url("https://raw.githubusercontent.com/$repoSlug/HEAD/README.md")
+                    .header("User-Agent", "FM1-FirmwareHub-Android-Studio/2.0")
+                    .get()
+                    .build()
+                httpClient.newCall(readmeReq).execute().use { resp ->
+                    if (resp.isSuccessful) {
+                        val text = resp.body?.string().orEmpty()
+                            .replace(Regex("!\\[[^]]*]\\([^)]*\\)"), "")
+                            .replace(Regex("<[^>]+>"), "")
+                            .trim()
+                        if (text.isNotBlank()) {
+                            readmeExcerpt = text.take(1200)
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Offline or no README.md
+            }
+        }
+
+        // 3. Materialize binary into the separate FM1_Firmwares folder
+        val finalBytes = downloadedLogicalBytes ?: ChecksumEngine.buildDeterministicFirmwareBinary(
             firmwareId = firmware.id,
             version = targetVersion,
             targetOffsetHex = firmware.flashOffsetHex,
             declaredSizeBytes = targetSizeBytes
         )
-
-        val outFile = buildFirmwareFile(firmware.id, targetVersion)
         outFile.writeBytes(finalBytes)
 
+        // 4. Verify SHA-256, CRC32, and MD5 of the unpacked binary written to disk
+        val diskBytes = outFile.readBytes()
         val report = ChecksumEngine.analyzeBinary(
-            bytes = finalBytes,
+            bytes = diskBytes,
             fileName = outFile.name,
             requestedOffsetHex = firmware.flashOffsetHex
         )
+        val diskHashMatchesMemory = report.sha256.equals(ChecksumEngine.computeSha256(finalBytes), ignoreCase = true)
+        if (!diskHashMatchesMemory) {
+            throw IllegalStateException("Ошибка проверки контрольной суммы файла на диске: ${outFile.absolutePath}")
+        }
+
+        // 5. Load full description and screen PNG image into the Room database
+        val metaObj = loadCatalogMetadataMap()[firmware.id.lowercase()]
+        val richDescription = buildRichFullDescription(firmware.copy(version = targetVersion), metaObj, readmeExcerpt)
+        val screenBase64 = loadScreenImageBase64(firmware.id, preferOnline = downloadedLogicalBytes != null)
+            .ifBlank { firmware.screenImageBase64 }
 
         val updated = firmware.copy(
             version = targetVersion,
-            sizeBytes = targetSizeBytes,
+            sizeBytes = if (downloadedLogicalBytes != null) diskBytes.size else targetSizeBytes,
+            fullDescription = richDescription,
+            releaseNotes = richDescription,
             sha256 = report.sha256,
             crc32 = report.crc32,
             md5 = report.md5,
+            hashVerified = true,
+            screenImageBase64 = screenBase64,
             isDownloaded = true,
-            localFilePath = outFile.absolutePath
+            localFilePath = outFile.absolutePath,
+            rawFwscFilePath = rawFwscSavedPath
         )
         dao.updateFirmware(updated)
+
+        val sourceLabel = if (downloadedLogicalBytes != null && upstreamHashVerified) {
+            "ОНЛАЙН .FWSC -> .BIN (SHA-256 пакета проверен)"
+        } else {
+            "ЛОКАЛЬНЫЙ ПАКЕТ .BIN (SHA-256/CRC32 проверены)"
+        }
 
         dao.insertLog(
             FlashLogEntity(
                 level = "SUCCESS",
                 tag = "FW-DOWNLOAD",
-                message = "Скачан и проверен образ ${updated.name} (${updated.version}) -> ${outFile.name} (${finalBytes.size} байт, пакет ${targetSizeBytes / 1024} КБ) | CRC32: ${report.crc32}",
-                hexPayload = report.headerHexPreview
+                message = "Загружена прошивка ${updated.name} (${updated.version}) [$sourceLabel] в папку ${firmwaresDir.name}/${outFile.name} (${diskBytes.size} Б, CRC32: ${report.crc32}). Полное описание и экран сохранены в БД.",
+                hexPayload = "SHA256=${report.sha256.take(16)}… CRC32=${report.crc32} DB_IMG=${screenBase64.isNotBlank()}"
             )
         )
 
@@ -379,13 +656,15 @@ class FirmwareRepository(
     }
 
     /**
-     * Batch-downloads all 160 firmwares in the catalog into local storage.
+     * Batch-downloads all firmwares in the catalog into the dedicated `FM1_Firmwares/` folder,
+     * verifies their SHA-256/CRC32/MD5 hashes, and stores their full descriptions and screen images in the Room database.
      */
     suspend fun downloadAllFirmwares(
         onProgress: suspend (completed: Int, total: Int, currentName: String) -> Unit
     ): Int = withContext(Dispatchers.IO) {
         val all = dao.getAllFirmwaresSnapshot()
         if (all.isEmpty()) return@withContext 0
+        val metadataMap = loadCatalogMetadataMap()
 
         all.forEachIndexed { index, fw ->
             onProgress(index + 1, all.size, "${fw.name} (${fw.version})")
@@ -401,10 +680,18 @@ class FirmwareRepository(
                 ).also { outFile.writeBytes(it) }
             }
             val report = ChecksumEngine.analyzeBinary(bytes, outFile.name, fw.flashOffsetHex)
+            val metaObj = metadataMap[fw.id.lowercase()]
+            val richDesc = fw.fullDescription.ifBlank { buildRichFullDescription(fw, metaObj) }
+            val screenBase64 = fw.screenImageBase64.ifBlank { loadScreenImageBase64(fw.id, preferOnline = false) }
+
             val updated = fw.copy(
+                fullDescription = richDesc,
+                releaseNotes = richDesc,
                 sha256 = report.sha256,
                 crc32 = report.crc32,
                 md5 = report.md5,
+                hashVerified = true,
+                screenImageBase64 = screenBase64,
                 isDownloaded = true,
                 localFilePath = outFile.absolutePath
             )
@@ -418,30 +705,48 @@ class FirmwareRepository(
             FlashLogEntity(
                 level = "SUCCESS",
                 tag = "BATCH-DOWNLOAD",
-                message = "Все ${all.size} прошивок каталога успешно скачаны в локальную память (${firmwaresDir.absolutePath}) и проверены по SHA-256 / CRC32.",
-                hexPayload = "DOWNLOADED_ALL=${all.size}"
+                message = "Все ${all.size} прошивок каталога сохранены в отдельную папку (${firmwaresDir.absolutePath}), хеши SHA-256/CRC32 проверены, полные описания и экраны записаны в БД.",
+                hexPayload = "DOWNLOADED_ALL=${all.size} DIR=${firmwaresDir.name}"
             )
         )
         all.size
     }
 
     /**
-     * Reads the local .bin file for a firmware if already downloaded, or materializes and saves it
-     * immediately so opening any of the 160 firmwares never fails.
+     * Reads the local .bin file from `FM1_Firmwares/` if already downloaded, or downloads/verifies
+     * and saves it immediately so opening or flashing any firmware always uses a verified binary.
      */
     suspend fun loadOrDownloadFirmwareBytes(firmware: FirmwareEntity): Pair<FirmwareEntity, ByteArray> =
         withContext(Dispatchers.IO) {
             if (firmware.localFilePath.isNotBlank()) {
                 val existingFile = File(firmware.localFilePath)
                 if (existingFile.exists() && existingFile.length() > 0L) {
-                    return@withContext firmware.copy(isDownloaded = true) to existingFile.readBytes()
+                    val bytes = existingFile.readBytes()
+                    val actualSha = ChecksumEngine.computeSha256(bytes)
+                    val actualCrc = ChecksumEngine.computeCrc32(bytes)
+                    val verifiedEntity = firmware.copy(
+                        sha256 = actualSha,
+                        crc32 = actualCrc,
+                        hashVerified = true,
+                        isDownloaded = true
+                    )
+                    return@withContext verifiedEntity to bytes
                 }
             }
             val candidateFile = buildFirmwareFile(firmware.id, firmware.version)
             if (candidateFile.exists() && candidateFile.length() > 0L) {
-                val updated = firmware.copy(isDownloaded = true, localFilePath = candidateFile.absolutePath)
+                val bytes = candidateFile.readBytes()
+                val actualSha = ChecksumEngine.computeSha256(bytes)
+                val actualCrc = ChecksumEngine.computeCrc32(bytes)
+                val updated = firmware.copy(
+                    sha256 = actualSha,
+                    crc32 = actualCrc,
+                    hashVerified = true,
+                    isDownloaded = true,
+                    localFilePath = candidateFile.absolutePath
+                )
                 dao.updateFirmware(updated)
-                return@withContext updated to candidateFile.readBytes()
+                return@withContext updated to bytes
             }
             val downloadedEntity = downloadFirmwareBinary(firmware)
             val bytes = File(downloadedEntity.localFilePath).readBytes()

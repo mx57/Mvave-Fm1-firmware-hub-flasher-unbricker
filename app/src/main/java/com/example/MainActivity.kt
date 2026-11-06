@@ -383,6 +383,7 @@ fun FirmwareHubApp(
                                         firmware = detailFw,
                                         checksumReport = checksumReport,
                                         isDownloading = isDownloadingFirmware,
+                                        firmwaresFolderPath = viewModel.firmwaresFolderPath,
                                         onBackToCatalog = viewModel::closeFirmwareDetail,
                                         onToggleFavorite = viewModel::toggleFavoriteFirmware,
                                         onDownloadFirmware = { fw, ver, size ->
@@ -422,6 +423,7 @@ fun FirmwareHubApp(
                                         isSyncingHub = isSyncingHub,
                                         isDownloadingAll = isDownloadingAll,
                                         batchDownloadStatus = batchDownloadStatus,
+                                        firmwaresFolderPath = viewModel.firmwaresFolderPath,
                                         connectedDevice = connectedDevice,
                                         onSearchQueryChange = viewModel::updateSearchQuery,
                                         onSelectCategory = viewModel::selectCategory,
@@ -505,6 +507,7 @@ fun FirmwareHubApp(
                                 onOpenUnbricker = { viewModel.navigateTo(AppDestination.UNBRICKER) },
                                 onToggleAutoBackup = viewModel::toggleAutoBackupBeforeFlash,
                                 onToggleVerifyAfterFlash = viewModel::toggleVerifyAfterFlash,
+                                onSelectWireProtocol = viewModel::selectWireProtocol,
                                 onBackupNow = { viewModel.createDeviceBackupNow() },
                                 onImportLocalFile = {
                                     filePickerLauncher.launch(arrayOf("*/*"))
@@ -527,6 +530,7 @@ fun FirmwareHubApp(
                                 onSelectSimulatedProfile = viewModel::selectSimulatedProfile,
                                 onSetHardBrickSuspected = viewModel::setHardBrickCableSuspected,
                                 onSelectUnbrickMethod = viewModel::selectUnbrickMethod,
+                                onSelectWireProtocol = viewModel::selectWireProtocol,
                                 onSelectPinShortVector = viewModel::selectPinShortVector,
                                 onSetUnbrickUiMode = viewModel::setUnbrickUiMode,
                                 onSelectTargetOption = viewModel::selectUnbrickTargetOption,

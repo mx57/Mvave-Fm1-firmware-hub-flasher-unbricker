@@ -71,6 +71,7 @@ fun FirmwareDetailScreen(
     firmware: FirmwareEntity,
     checksumReport: ChecksumReport?,
     isDownloading: Boolean,
+    firmwaresFolderPath: String = "FM1_Firmwares",
     onBackToCatalog: () -> Unit,
     onToggleFavorite: (FirmwareEntity) -> Unit,
     onDownloadFirmware: (FirmwareEntity, String, Int) -> Unit,
@@ -296,13 +297,33 @@ fun FirmwareDetailScreen(
                         Column(modifier = Modifier.padding(10.dp)) {
                             Text(
                                 text = if (firmware.isDownloaded && firmware.localFilePath.isNotBlank()) {
-                                    "Локальный файл готов: ${firmware.localFilePath}"
+                                    "Папка прошивок (FM1_Firmwares): ${firmware.localFilePath}"
                                 } else {
-                                    "Источник: ${firmware.downloadUrl} (автоматическая сборка и проверка 0x00004000)"
+                                    "Целевая папка загрузки: $firmwaresFolderPath (${firmware.downloadUrl})"
                                 },
                                 fontFamily = JetBrainsMonoFontFamily,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (firmware.isDownloaded) SynthPhosphor else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (firmware.rawFwscFilePath.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Исходный контейнер .fwsc: ${firmware.rawFwscFilePath}",
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SynthCyan
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = if (firmware.hashVerified) {
+                                    "Хеш SHA-256 и CRC32 проверены • Полное описание и PNG-экран сохранены в БД Room"
+                                } else {
+                                    "При скачивании проверяется SHA-256, описание и картинка экрана сохраняются в БД, а .bin — в папку FM1_Firmwares/"
+                                },
+                                fontFamily = JetBrainsMonoFontFamily,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (firmware.hashVerified) SynthPhosphor else SynthCyan
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
@@ -538,13 +559,13 @@ fun FirmwareDetailScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Примечания к релизу (Release Notes) и архитектура движка",
+                        text = "Полное описание из базы данных и архитектура движка",
                         style = MaterialTheme.typography.titleMedium,
                         color = SynthOrange
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = firmware.releaseNotes.ifBlank { firmware.summary },
+                        text = firmware.fullDescription.ifBlank { firmware.releaseNotes.ifBlank { firmware.summary } },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )

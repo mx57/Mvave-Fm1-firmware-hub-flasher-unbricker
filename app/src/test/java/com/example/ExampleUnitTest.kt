@@ -2,7 +2,11 @@ package com.example
 
 import com.example.data.AppDatabase
 import com.example.data.FirmwareVersionHistoryCodec
+import com.example.domain.ActiveWireProtocol
 import com.example.domain.ChecksumEngine
+import com.example.domain.SpiPinShortVector
+import com.example.domain.UnbrickMethodType
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -33,14 +37,30 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun checksumEngine_detectsRawFwscAtZeroOffsetAndAutoProtectsTo0x4000() {
+    fun checksumEngine_unpacksFwsc20MarkerBytesAndAutoProtectsTo0x4000() {
+        // Build a synthetic .fwsc with 20 blocks of 0x30 bytes (960 bytes) + 100 tail bytes
+        val logicalExpected = ByteArray(20 * 0x2F + 100) { idx -> ((idx * 7) and 0xFF).toByte() }
+        val packedFwsc = ByteArray(20 * 0x30 + 100)
+        var srcPos = 0
+        var dstPos = 0
+        for (block in 0 until 20) {
+            System.arraycopy(logicalExpected, srcPos, packedFwsc, dstPos, 0x2F)
+            packedFwsc[dstPos + 0x2F] = 0xA5.toByte() // .fwsc container marker at index 0x2F
+            srcPos += 0x2F
+            dstPos += 0x30
+        }
+        System.arraycopy(logicalExpected, srcPos, packedFwsc, dstPos, 100)
+
+        val unpacked = ChecksumEngine.unpackFwscLogicalImage(packedFwsc)
+        assertEquals(logicalExpected.size, unpacked.size)
+        assertArrayEquals(logicalExpected, unpacked)
+
         val raw = "JLWL82FM_RAW_PACKAGE".toByteArray()
         val report = ChecksumEngine.analyzeBinary(
             bytes = raw,
             fileName = "unsafe_package.fwsc",
             requestedOffsetHex = "0x0000"
         )
-
         assertTrue(report.startsWithBootHeaderHazard)
         assertTrue(report.targetOffsetHex.contains("0x00004000"))
     }
@@ -51,6 +71,7 @@ class ExampleUnitTest {
         assertEquals(160, catalog.size)
         catalog.forEach { fw ->
             assertTrue(fw.releaseNotes.isNotBlank())
+            assertTrue(fw.fullDescription.isNotBlank())
             assertTrue(fw.compatibleHardwareRevs.isNotBlank())
             val versions = FirmwareVersionHistoryCodec.decode(fw.versionHistoryJson, fw)
             assertTrue("Expected version history for ${fw.id}", versions.isNotEmpty())
@@ -58,15 +79,16 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun unbrickMethods_all10NoSolderVectorsAnd3PinShortCombinationsAreValid() {
-        assertEquals(10, com.example.domain.UnbrickMethodType.entries.size)
-        com.example.domain.UnbrickMethodType.entries.forEach { method ->
+    fun unbrickMethods_all6VerifiedVectorsAndDualProtocolsAreValid() {
+        assertEquals(6, UnbrickMethodType.entries.size)
+        UnbrickMethodType.entries.forEach { method ->
             assertFalse("Method ${method.name} must be no-solder", method.requiresSoldering)
             assertTrue(method.physicsExplanation.isNotBlank())
             assertTrue(method.troubleshootingTips.isNotBlank())
             assertEquals(4, method.steps.size)
         }
-        assertEquals(3, com.example.domain.SpiPinShortVector.entries.size)
+        assertEquals(3, SpiPinShortVector.entries.size)
+        assertEquals(3, ActiveWireProtocol.entries.size)
         val ramLoader = ChecksumEngine.buildWl82RamLoaderBinary()
         assertEquals(4096, ramLoader.size)
         val goldenBoot = ChecksumEngine.buildGoldenBootloaderHeader16Kb()

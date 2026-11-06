@@ -12,6 +12,7 @@ import com.example.data.FirmwareRepository
 import com.example.data.FirmwareVersionEntry
 import com.example.data.FirmwareVersionHistoryCodec
 import com.example.data.FlashLogEntity
+import com.example.domain.ActiveWireProtocol
 import com.example.domain.ChecksumEngine
 import com.example.domain.ChecksumReport
 import com.example.domain.ConnectedUsbDeviceInfo
@@ -108,6 +109,7 @@ data class FlashSessionUiState(
     val isError: Boolean = false,
     val activeUnbrickStep: Int = 0,
     val selectedUnbrickMethod: UnbrickMethodType = UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT,
+    val activeWireProtocol: ActiveWireProtocol = ActiveWireProtocol.AUTO_DUAL_PROTOCOL,
     val selectedPinShortVector: SpiPinShortVector = SpiPinShortVector.CS_TO_VCC_SAFE,
     val unbrickUiMode: UnbrickUiMode = UnbrickUiMode.INTERACTIVE_WIZARD,
     val unbrickTargetOption: UnbrickTargetFirmwareOption = UnbrickTargetFirmwareOption.STOCK_V16,
@@ -128,8 +130,14 @@ data class FlashSessionUiState(
 class FirmwareHubViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AppDatabase.getInstance(application)
-    private val repository = FirmwareRepository(database.appDao(), application.filesDir)
+    private val repository = FirmwareRepository(
+        database.appDao(),
+        application.getExternalFilesDir(null) ?: application.filesDir,
+        application.assets
+    )
     private val usbEngine = UsbFlashEngine(application)
+
+    val firmwaresFolderPath: String = repository.firmwaresFolderPath
 
     private val _currentDestination = MutableStateFlow(AppDestination.CATALOG)
     val currentDestination: StateFlow<AppDestination> = _currentDestination.asStateFlow()
@@ -351,19 +359,24 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
         _isShowingFirmwareDetail.value = true
         _currentDestination.value = AppDestination.CATALOG
         viewModelScope.launch {
-            val binary = ChecksumEngine.buildDeterministicFirmwareBinary(
-                firmwareId = firmware.id,
-                version = firmware.version,
-                targetOffsetHex = firmware.flashOffsetHex,
-                declaredSizeBytes = firmware.sizeBytes
-            )
+            val (freshFw, binary) = if (firmware.isDownloaded && firmware.localFilePath.isNotBlank()) {
+                repository.loadOrDownloadFirmwareBytes(firmware)
+            } else {
+                firmware to ChecksumEngine.buildDeterministicFirmwareBinary(
+                    firmwareId = firmware.id,
+                    version = firmware.version,
+                    targetOffsetHex = firmware.flashOffsetHex,
+                    declaredSizeBytes = firmware.sizeBytes
+                )
+            }
+            _selectedFirmware.value = freshFw
             val report = ChecksumEngine.analyzeBinary(
                 bytes = binary,
-                fileName = "${firmware.id}.bin",
-                requestedOffsetHex = firmware.flashOffsetHex
+                fileName = "${freshFw.id}.bin",
+                requestedOffsetHex = freshFw.flashOffsetHex
             )
             _activeChecksumReport.value = report
-            _customExpectedHashInput.value = firmware.sha256
+            _customExpectedHashInput.value = freshFw.sha256
         }
     }
 
@@ -527,9 +540,15 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun selectUnbrickMethod(method: UnbrickMethodType) {
+        val suggestedProtocol = when (method) {
+            UnbrickMethodType.BOOTLOOP_SYSEX_CATCHER -> ActiveWireProtocol.AUTO_DUAL_PROTOCOL
+            UnbrickMethodType.SOFT_BRICK_SCSI_UBOOT -> ActiveWireProtocol.JIELI_SCSI_BOT
+            else -> _flashSessionState.value.activeWireProtocol
+        }
         _flashSessionState.update {
             it.copy(
                 selectedUnbrickMethod = method,
+                activeWireProtocol = suggestedProtocol,
                 activeUnbrickStep = 0,
                 allowBootSectorRebuild = method == UnbrickMethodType.FWSC_CONTAINER_SURGEON ||
                     method == UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER
@@ -539,8 +558,20 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             repository.log(
                 level = "INFO",
                 tag = "UNBRICK-METHOD",
-                message = "Выбран вектор реанимации: ${method.title}",
-                hexPayload = "OFFSET=${method.targetOffsetDefault}"
+                message = "Выбран проверенный вектор реанимации: ${method.title}",
+                hexPayload = "OFFSET=${method.targetOffsetDefault} PROTO=${suggestedProtocol.name}"
+            )
+        }
+    }
+
+    fun selectWireProtocol(protocol: ActiveWireProtocol) {
+        _flashSessionState.update { it.copy(activeWireProtocol = protocol) }
+        viewModelScope.launch {
+            repository.log(
+                level = "USB_IO",
+                tag = "WIRE-PROTO",
+                message = "Выбран протокол проводной записи: ${protocol.title} (${protocol.description})",
+                hexPayload = protocol.name
             )
         }
     }
@@ -769,6 +800,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 val dev = _connectedDevice.value
 
                 if (dev.isReadyToFlash) {
+                    var activeDev = dev
                     runCatching {
                         usbEngine.executeUsbControlTransferReset(dev) { l, t, m, h ->
                             repository.log(l, t, m, h)
@@ -777,13 +809,21 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                             usbEngine.sendSysExBootloaderTrigger(dev) { l, t, m, h ->
                                 repository.log(l, t, m, h)
                             }
+                            activeDev = usbEngine.awaitBootloaderReenumeration(
+                                previousDevice = dev,
+                                onLog = { l, t, m, h -> repository.log(l, t, m, h) },
+                                onProgress = { step ->
+                                    _flashSessionState.update { it.copy(currentProgress = step) }
+                                }
+                            )
+                            _connectedDevice.value = activeDev
                         }
-                        usbEngine.injectWl82LoaderToSram(dev) { l, t, m, h ->
+                        usbEngine.injectWl82LoaderToSram(activeDev) { l, t, m, h ->
                             repository.log(l, t, m, h)
                         }
                     }
-                    val caughtMsg = "ПЕРЕХВАТ УСПЕШЕН (цикл #$attempts): Устройство ${dev.productName} (${dev.vidPidHex}) захвачено! Если вы держали пинцет на 25Q80 — УБЕРИТЕ ЕГО СЕЙЧАС, wl82loader.bin (4 КБ) уже в SRAM 0x010000!"
-                    repository.log("SUCCESS", "CATCHER-LOCKED", caughtMsg, dev.vidPidHex)
+                    val caughtMsg = "ПЕРЕХВАТ УСПЕШЕН (цикл #$attempts): Устройство ${activeDev.productName} (${activeDev.vidPidHex}) переведено в загрузчик и захвачено! Если вы держали пинцет на 25Q80 — УБЕРИТЕ ЕГО СЕЙЧАС, wl82loader.bin (4 КБ) уже в SRAM 0x010000!"
+                    repository.log("SUCCESS", "CATCHER-LOCKED", caughtMsg, activeDev.vidPidHex)
                     _flashSessionState.update {
                         it.copy(
                             isBootloopCatcherActive = false,
@@ -893,7 +933,8 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     allowBootHeaderRebuild = true,
                     maxRetries = _flashSessionState.value.maxSectorRetries,
                     blockSizeBytes = _flashSessionState.value.transferBlockSize,
-                    injectRamLoaderFirst = true
+                    injectRamLoaderFirst = true,
+                    preferredProtocol = _flashSessionState.value.activeWireProtocol
                 ) { step ->
                     _flashSessionState.update { state ->
                         state.copy(
@@ -999,7 +1040,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 _activeChecksumReport.value = report
                 _customExpectedHashInput.value = freshEntity.sha256
                 _statusBannerMessage.value =
-                    "Прошивка «${freshEntity.name} (${freshEntity.version})» скачана в память и проверена (CRC32: ${report.crc32})."
+                    "Прошивка «${freshEntity.name} (${freshEntity.version})» сохранена в папку FM1_Firmwares/, описание и PNG-экран записаны в БД (SHA-256 / CRC32: ${report.crc32} OK)."
             } catch (e: Exception) {
                 _statusBannerMessage.value = "Ошибка скачивания прошивки: ${e.localizedMessage}"
             } finally {
@@ -1015,11 +1056,11 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             try {
                 val total = repository.downloadAllFirmwares { completed, count, currentName ->
                     _batchDownloadStatus.value =
-                        "Скачивание [$completed/$count]: $currentName…"
+                        "Загрузка и сверка SHA-256 [$completed/$count]: $currentName -> FM1_Firmwares/…"
                 }
                 _batchDownloadStatus.value = null
                 _statusBannerMessage.value =
-                    "Все $total прошивок каталога успешно скачаны в память устройства (.bin) и готовы к открытию!"
+                    "Все $total прошивок скачаны в отдельную папку FM1_Firmwares/, хеши SHA-256 проверены, описания и экраны сохранены в БД!"
             } catch (e: Exception) {
                 _batchDownloadStatus.value = null
                 _statusBannerMessage.value = "Ошибка пакетной загрузки: ${e.localizedMessage}"
@@ -1239,19 +1280,16 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             }
 
             val stamp = SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(Date())
-            val dumpBytes = ChecksumEngine.buildDeterministicFirmwareBinary(
-                firmwareId = "backup_${dev.vidPidHex}_$stamp",
-                version = dev.bootloaderVersion,
-                targetOffsetHex = "0x00000000",
-                declaredSizeBytes = 65536
-            )
+            val dumpBytes = usbEngine.readEepromBackupFromDevice(dev) { l, t, m, h ->
+                repository.log(l, t, m, h)
+            }
             val report = ChecksumEngine.analyzeBinary(dumpBytes, "eeprom_backup.bin", "0x00000000")
             val backup = BackupDumpEntity(
                 title = "Дамп EEPROM & Boot ($stamp)",
                 deviceName = dev.productName,
                 deviceMode = dev.profileType.protocolBadge,
                 regionHex = "0x00000000 – 0x0000FFFF (WL82 Boot + 64 Presets)",
-                sizeBytes = 65536,
+                sizeBytes = dumpBytes.size,
                 presetCount = 64,
                 sha256 = report.sha256,
                 crc32 = report.crc32,
@@ -1264,14 +1302,14 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             repository.log(
                 level = "SUCCESS",
                 tag = "EEPROM-BACKUP",
-                message = "Создана резервная копия настроек и загрузчика (${backup.title}) | CRC32: ${report.crc32}",
+                message = "Создана резервная копия настроек и загрузчика по USB OTG (${backup.title}) | CRC32: ${report.crc32}",
                 hexPayload = report.headerHexPreview
             )
             _flashSessionState.update {
                 it.copy(verifiedWizardStages = it.verifiedWizardStages + 2)
             }
             _statusBannerMessage.value =
-                "Резервная копия EEPROM и заголовка 0x0000–0x3FFF успешно сохранена (CRC32: ${report.crc32})."
+                "Резервная копия EEPROM и заголовка 0x0000–0x3FFF успешно считана по проводу и сохранена (CRC32: ${report.crc32})."
         }
     }
 
@@ -1434,15 +1472,29 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     hexPayload = report.headerHexPreview
                 )
 
-                // Stage 1: If in normal MIDI mode or Bootloop Catcher mode, send SysEx trigger first
-                if (!dev.profileType.isBootloaderMode) {
+                // Stage 1: If in normal MIDI mode, send SysEx trigger (F0 22 24 35 7D F7).
+                // The FM-1 OLED screen turns off and the USB device disconnects & re-enumerates on a new USB port/PID!
+                val activeDev: ConnectedUsbDeviceInfo = if (!dev.profileType.isBootloaderMode) {
                     usbEngine.sendSysExBootloaderTrigger(dev) { level, tag, msg, hex ->
                         repository.log(level, tag, msg, hex)
                     }
+                    val reenumerated = usbEngine.awaitBootloaderReenumeration(
+                        previousDevice = dev,
+                        onLog = { level, tag, msg, hex ->
+                            repository.log(level, tag, msg, hex)
+                        },
+                        onProgress = { step ->
+                            _flashSessionState.update { it.copy(currentProgress = step) }
+                        }
+                    )
+                    _connectedDevice.value = reenumerated
+                    reenumerated
+                } else {
+                    dev
                 }
 
-                // Stage 2: Inject secondary loader `wl82loader.bin` into SRAM 0x010000
-                usbEngine.injectWl82LoaderToSram(dev) { level, tag, msg, hex ->
+                // Stage 2: Inject secondary loader `wl82loader.bin` into SRAM 0x010000 on the active bootloader port
+                usbEngine.injectWl82LoaderToSram(activeDev) { level, tag, msg, hex ->
                     repository.log(level, tag, msg, hex)
                 }
                 _flashSessionState.update {
@@ -1455,18 +1507,22 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 // Stage 3: Auto-backup current EEPROM/presets & 0x0000-0x3FFF before writing
                 if (_flashSessionState.value.autoBackupBeforeFlash || isUnbrickRecovery) {
                     val stamp = SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault()).format(Date())
+                    val eepromDump = usbEngine.readEepromBackupFromDevice(activeDev) { l, t, m, h ->
+                        repository.log(l, t, m, h)
+                    }
+                    val eepromReport = ChecksumEngine.analyzeBinary(eepromDump, "auto_backup.bin", "0x00000000")
                     repository.insertBackup(
                         BackupDumpEntity(
                             title = "Авто-бэкап перед ${if (isUnbrickRecovery) "Unbrick" else "прошивкой"} ${downloadedFw.name} ($stamp)",
-                            deviceName = dev.productName,
-                            deviceMode = dev.profileType.protocolBadge,
-                            regionHex = "0x00000000 – 0x000FFFFF (1MB Full SPI Backup)",
-                            sizeBytes = 65536,
+                            deviceName = activeDev.productName,
+                            deviceMode = activeDev.profileType.protocolBadge,
+                            regionHex = "0x00000000 – 0x0000FFFF (WL82 Boot + 64 Presets)",
+                            sizeBytes = eepromDump.size,
                             presetCount = 64,
-                            sha256 = report.sha256,
-                            crc32 = report.crc32,
-                            md5 = report.md5,
-                            rawHexPreview = report.headerHexPreview,
+                            sha256 = eepromReport.sha256,
+                            crc32 = eepromReport.crc32,
+                            md5 = eepromReport.md5,
+                            rawHexPreview = eepromReport.headerHexPreview,
                             presetsJson = """{"auto_backup":true,"method":"${_flashSessionState.value.selectedUnbrickMethod.name}","target_firmware":"${downloadedFw.name}","version":"${downloadedFw.version}","protected_boot":"0x0000-0x3FFF"}""",
                             notes = "Автоматическая точка восстановления перед записью ${downloadedFw.name} (${downloadedFw.version})."
                         )
@@ -1474,7 +1530,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     repository.log(
                         level = "INFO",
                         tag = "AUTO-BACKUP",
-                        message = "Сохранена резервная копия SPI Flash и заголовка загрузчика 0x0000–0x3FFF.",
+                        message = "Сохранена резервная копия SPI Flash и заголовка загрузчика 0x0000–0x3FFF (CRC32: ${eepromReport.crc32}).",
                         hexPayload = "BACKUP_REGION=0x0000_0xFFFF"
                     )
                     _flashSessionState.update {
@@ -1485,7 +1541,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 // Determine whether we are writing 0x4000 Safe App or Full 0x0000+0x4000 (for CH341A or explicit Boot Rebuild)
                 val rebuildBoot = isUnbrickRecovery && (
                     _flashSessionState.value.allowBootSectorRebuild ||
-                        dev.profileType == UsbProfileType.CH341A_SPI_PROGRAMMER ||
+                        activeDev.profileType == UsbProfileType.CH341A_SPI_PROGRAMMER ||
                         _flashSessionState.value.selectedUnbrickMethod == UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER
                     )
 
@@ -1509,9 +1565,9 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     expectedCrc = report.crc32
                 }
 
-                // Stage 4 & 5: Execute 64-sector SCSI CBW/CSW write with auto-retry and Read-Back verification
+                // Stage 4 & 5: Execute Dual-Protocol (SysEx OTA + SCSI CBW/CSW) write with auto-retry and Read-Back verification
                 val ok = usbEngine.executeFlashPipeline(
-                    deviceInfo = dev,
+                    deviceInfo = activeDev,
                     firmwareBytes = payloadToWrite,
                     declaredSizeBytes = downloadedFw.sizeBytes,
                     targetOffsetHex = targetOffset,
@@ -1520,7 +1576,8 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     allowBootHeaderRebuild = rebuildBoot,
                     maxRetries = _flashSessionState.value.maxSectorRetries,
                     blockSizeBytes = _flashSessionState.value.transferBlockSize,
-                    injectRamLoaderFirst = true
+                    injectRamLoaderFirst = true,
+                    preferredProtocol = _flashSessionState.value.activeWireProtocol
                 ) { progress ->
                     _flashSessionState.update { state ->
                         state.copy(
@@ -1531,19 +1588,20 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     if (progress.completedSectors % 16 == 0 || progress.completedSectors == 64) {
                         repository.log(
                             level = "USB_IO",
-                            tag = "SCSI-SECTOR",
+                            tag = "FLASH-SECTOR",
                             message = progress.logLine,
                             hexPayload = progress.hexPacketSample
                         )
                     }
                 }
 
-                val simPrefix = if (dev.isSimulated) "[ТЕСТОВАЯ СИМУЛЯЦИЯ] " else ""
+                val simPrefix = if (activeDev.isSimulated) "[ТЕСТОВАЯ СИМУЛЯЦИЯ] " else ""
                 val methodLabel = _flashSessionState.value.selectedUnbrickMethod.shortBadge
+                val protoLabel = _flashSessionState.value.activeWireProtocol.title
                 val doneText = if (isUnbrickRecovery) {
-                    "${simPrefix}UNBRICK УСПЕШЕН ($methodLabel): wl82loader.bin запущен в SRAM, прошивка «${downloadedFw.name} (${downloadedFw.version})» записана по смещению $targetOffset (SCSI CBW/CSW) и верифицирована (CRC32: $expectedCrc)!"
+                    "${simPrefix}UNBRICK УСПЕШЕН ($methodLabel • $protoLabel): порт загрузчика ${activeDev.vidPidHex} перехвачен после гашения экрана, прошивка «${downloadedFw.name} (${downloadedFw.version})» записана по смещению $targetOffset и верифицирована (CRC32: $expectedCrc)!"
                 } else {
-                    "${simPrefix}Прошивка «${downloadedFw.name} (${downloadedFw.version})» успешно записана по адресу $targetOffset и верифицирована (SHA-256 / CRC32: $expectedCrc)!"
+                    "${simPrefix}Прошивка «${downloadedFw.name} (${downloadedFw.version})» успешно записана по адресу $targetOffset ($protoLabel) после перехвата загрузчика ${activeDev.vidPidHex} и верифицирована (SHA-256 / CRC32: $expectedCrc)!"
                 }
 
                 repository.log(

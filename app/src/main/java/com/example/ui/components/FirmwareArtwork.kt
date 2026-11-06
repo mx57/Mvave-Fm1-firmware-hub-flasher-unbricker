@@ -58,7 +58,7 @@ import com.example.ui.theme.SynthCyan
 import com.example.ui.theme.SynthOrange
 import com.example.ui.theme.SynthPhosphor
 
-private val firmwareScreenBitmapCache = object : LruCache<String, ImageBitmap>(64) {}
+private val firmwareScreenBitmapCache = object : LruCache<String, ImageBitmap>(96) {}
 
 /**
  * Returns the exact bundled asset path for a firmware's authentic OLED/TFT display screenshot
@@ -70,16 +70,35 @@ fun resolveFirmwareScreenAssetPath(firmware: FirmwareEntity): String {
 }
 
 /**
- * Loads and caches the authentic per-firmware screen PNG from `assets/fw_screens/<id>.png`.
+ * Loads and caches the authentic per-firmware screen PNG:
+ * 1) First checks `firmware.screenImageBase64` stored in the Room database (`firmwares` table).
+ * 2) Falls back to the bundled `assets/fw_screens/<id>.png` asset if not yet stored in DB.
  */
 fun loadFirmwareScreenAssetBitmap(context: Context, firmware: FirmwareEntity): ImageBitmap? {
+    val cacheKey = if (firmware.screenImageBase64.isNotBlank()) {
+        "db_screen_${firmware.id}_${firmware.screenImageBase64.length}"
+    } else {
+        resolveFirmwareScreenAssetPath(firmware)
+    }
+    firmwareScreenBitmapCache.get(cacheKey)?.let { return it }
+
+    if (firmware.screenImageBase64.isNotBlank()) {
+        runCatching {
+            val rawBytes = android.util.Base64.decode(firmware.screenImageBase64, android.util.Base64.DEFAULT)
+            val bitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
+            bitmap?.asImageBitmap()?.also { imageBitmap ->
+                firmwareScreenBitmapCache.put(cacheKey, imageBitmap)
+                return imageBitmap
+            }
+        }
+    }
+
     val assetPath = resolveFirmwareScreenAssetPath(firmware)
-    firmwareScreenBitmapCache.get(assetPath)?.let { return it }
     return try {
         context.assets.open(assetPath).use { inputStream ->
             val bitmap = BitmapFactory.decodeStream(inputStream)
             bitmap?.asImageBitmap()?.also { imageBitmap ->
-                firmwareScreenBitmapCache.put(assetPath, imageBitmap)
+                firmwareScreenBitmapCache.put(cacheKey, imageBitmap)
             }
         }
     } catch (_: Exception) {

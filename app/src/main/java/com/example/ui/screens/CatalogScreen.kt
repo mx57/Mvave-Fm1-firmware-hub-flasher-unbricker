@@ -104,6 +104,7 @@ fun CatalogScreen(
     isSyncingHub: Boolean,
     isDownloadingAll: Boolean,
     batchDownloadStatus: String?,
+    firmwaresFolderPath: String = "FM1_Firmwares",
     connectedDevice: ConnectedUsbDeviceInfo,
     onSearchQueryChange: (String) -> Unit,
     onSelectCategory: (FirmwareCategory) -> Unit,
@@ -482,11 +483,21 @@ fun CatalogScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Показано: ${firmwares.size} из $totalCatalogCount • Скачано .bin: $downloadedCount/$totalCatalogCount",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column {
+                        Text(
+                            text = "Показано: ${firmwares.size} из $totalCatalogCount • Скачано в FM1_Firmwares/: $downloadedCount/$totalCatalogCount",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "Папка прошивок: $firmwaresFolderPath",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SynthCyan,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
 
                     if (isAnyFilterActive) {
                         AssistChip(
@@ -642,11 +653,29 @@ private fun FirmwareCatalogCard(
                             shape = RoundedCornerShape(6.dp)
                         ) {
                             Text(
-                                text = if (firmware.isDownloaded) "СКАЧАНО .BIN" else "ГОТОВО К ЗАГРУЗКЕ",
+                                text = if (firmware.isDownloaded) {
+                                    "FM1_FIRMWARES (.BIN) • SHA-256 OK"
+                                } else {
+                                    "ГОТОВО К ЗАГРУЗКЕ"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = if (firmware.isDownloaded) SynthPhosphor else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                             )
+                        }
+
+                        if (firmware.screenImageBase64.isNotBlank() || firmware.fullDescription.isNotBlank()) {
+                            Surface(
+                                color = SynthCyan.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = "ОПИСАНИЕ И ЭКРАН В БД",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = SynthCyan,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
                         }
                     }
 
@@ -817,13 +846,13 @@ private fun FirmwareCatalogCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Примечания к релизу (Release Notes):",
+                            text = "Полное описание и примечания к релизу (из БД):",
                             style = MaterialTheme.typography.labelLarge,
                             color = SynthOrange
                         )
                     }
                     Text(
-                        text = firmware.releaseNotes.ifBlank { firmware.changelog },
+                        text = firmware.fullDescription.ifBlank { firmware.releaseNotes.ifBlank { firmware.changelog } },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )

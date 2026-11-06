@@ -113,7 +113,34 @@ object ChecksumEngine {
     }
 
     /**
+     * Unpacks a raw `.fwsc` container into its logical firmware image using the authentic
+     * `fm1pkg.js` algorithm: in the first 20 blocks of 0x30 (48) bytes (first 960 bytes),
+     * every 48th byte (index `b * 0x30 + 0x2F`) is a 1-byte container marker that must be
+     * stripped before inspecting or flashing the logical image.
+     */
+    fun unpackFwscLogicalImage(fwscBytes: ByteArray): ByteArray {
+        val blockLen = 0x30
+        val markerBlocks = 20
+        if (fwscBytes.size < blockLen * markerBlocks) return fwscBytes.copyOf()
+        val out = ByteArray(fwscBytes.size - markerBlocks)
+        var outIdx = 0
+        for (b in 0 until markerBlocks) {
+            val start = b * blockLen
+            val copyLen = blockLen - 1 // Strip the 1-byte marker at offset 0x2F of each 0x30 block
+            System.arraycopy(fwscBytes, start, out, outIdx, copyLen)
+            outIdx += copyLen
+        }
+        val tailStart = markerBlocks * blockLen
+        val tailLen = fwscBytes.size - tailStart
+        if (tailLen > 0) {
+            System.arraycopy(fwscBytes, tailStart, out, outIdx, tailLen)
+        }
+        return out
+    }
+
+    /**
      * Unpacks an official or community `.fwsc` container (or raw `.bin` dump) using `fm1_extract_app` rules:
+     * - If `.fwsc`, first strips the 20 interleaved container marker bytes across the first 20x48-byte blocks (`unpackFwscLogicalImage`)
      * - Detects `.fwsc` container wrappers or dangerous 0x0000 boot headers prepended to the image
      * - Strips container metadata / 0x0000 boot prefix so only the clean 0x4000 application payload remains
      * - Generates a matching 16 KB Golden Boot Header (0x0000-0x3FFF) if boot sector reconstruction is needed
@@ -126,26 +153,37 @@ object ChecksumEngine {
         val goldenBoot = buildGoldenBootloaderHeader16Kb()
         val goldenBootCrc = computeCrc32(goldenBoot)
 
-        val asciiPrefix = if (rawBytes.size >= 16) {
-            String(rawBytes.sliceArray(0 until 16), Charsets.US_ASCII)
+        val isFwscByName = fileName.lowercase().endsWith(".fwsc")
+        val logicalBytes = if (isFwscByName && rawBytes.size >= 960) {
+            unpackFwscLogicalImage(rawBytes)
+        } else {
+            rawBytes
+        }
+        val markerBytesStripped = rawBytes.size - logicalBytes.size
+
+        val asciiPrefix = if (logicalBytes.size >= 16) {
+            String(logicalBytes.sliceArray(0 until 16), Charsets.US_ASCII)
         } else ""
 
-        val isFwscByName = fileName.lowercase().endsWith(".fwsc")
         val hasFwscHeaderMagic = asciiPrefix.contains("FWSC", ignoreCase = true) ||
-            asciiPrefix.contains("JLISD", ignoreCase = true)
+            asciiPrefix.contains("JLISD", ignoreCase = true) ||
+            asciiPrefix.contains("JLWL82BT", ignoreCase = true)
 
-        // If the file is a full 1MB dump or starts with a 16KB boot block + app block, strip the first 16KB for safe 0x4000 flashing
-        val stripCount = when {
-            hasFwscHeaderMagic && rawBytes.size > 256 -> 256
-            isFwscByName && rawBytes.size > BOOT_HEADER_SIZE_BYTES + 4096 -> BOOT_HEADER_SIZE_BYTES
-            rawBytes.size >= FULL_SPI_FLASH_SIZE_BYTES -> BOOT_HEADER_SIZE_BYTES
+        // If the logical image is a full 1MB dump or starts with a 16KB boot block + app block, strip the first 16KB for safe 0x4000 flashing
+        val headerStripCount = when {
+            asciiPrefix.contains("JLWL82BT", ignoreCase = true) && logicalBytes.size > BOOT_HEADER_SIZE_BYTES -> BOOT_HEADER_SIZE_BYTES
+            hasFwscHeaderMagic && logicalBytes.size > 256 -> 256
+            isFwscByName && logicalBytes.size > BOOT_HEADER_SIZE_BYTES + 4096 -> BOOT_HEADER_SIZE_BYTES
+            logicalBytes.size >= FULL_SPI_FLASH_SIZE_BYTES -> BOOT_HEADER_SIZE_BYTES
             else -> 0
         }
 
-        val extractedPayload = if (stripCount > 0 && rawBytes.size > stripCount) {
-            rawBytes.copyOfRange(stripCount, rawBytes.size)
-        } else if (rawBytes.isNotEmpty()) {
-            rawBytes.copyOf()
+        val totalStripped = markerBytesStripped + headerStripCount
+
+        val extractedPayload = if (headerStripCount > 0 && logicalBytes.size > headerStripCount) {
+            logicalBytes.copyOfRange(headerStripCount, logicalBytes.size)
+        } else if (logicalBytes.isNotEmpty()) {
+            logicalBytes.copyOf()
         } else {
             buildDeterministicFirmwareBinary(
                 firmwareId = firmwareIdFallback,
@@ -158,8 +196,8 @@ object ChecksumEngine {
         val appSha = computeSha256(extractedPayload)
         val appCrc = computeCrc32(extractedPayload)
 
-        val summary = if (stripCount > 0) {
-            "ХИРУРГИЯ FWSC ЗАВЕРШЕНА: Из файла «$fileName» удален опасный контейнерный заголовок ($stripCount байт). Чистый образ приложения (${extractedPayload.size} байт, CRC32: $appCrc) выровнен строго под безопасный адрес 0x00004000. Эталонный загрузчик 0x0000–0x3FFF (CRC32: $goldenBootCrc) готов к защите или реконструкции."
+        val summary = if (totalStripped > 0) {
+            "ХИРУРГИЯ FWSC ЗАВЕРШЕНА: Из файла «$fileName» удалены маркеры контейнера ($markerBytesStripped Б) и опасный заголовок ($headerStripCount Б, всего $totalStripped Б). Чистый образ приложения (${extractedPayload.size} байт, CRC32: $appCrc) выровнен строго под безопасный адрес 0x00004000. Эталонный загрузчик 0x0000–0x3FFF (CRC32: $goldenBootCrc) готов к защите или реконструкции."
         } else {
             "ПРОВЕРКА ОБРАЗА ЗАВЕРШЕНА: Бинарный пакет «$fileName» (${extractedPayload.size} байт, CRC32: $appCrc) уже выровнен для раздела 0x00004000 и не содержит опасных перезаписей сектора 0x0000. Эталонный загрузчик 0x0000–0x3FFF (CRC32: $goldenBootCrc) подготовлен."
         }
@@ -167,8 +205,8 @@ object ChecksumEngine {
         return FwscSurgeonReport(
             originalFileName = fileName,
             originalSizeBytes = rawBytes.size,
-            hadFwscContainerHeader = stripCount > 0 || isFwscByName,
-            strippedHeaderBytes = stripCount,
+            hadFwscContainerHeader = totalStripped > 0 || isFwscByName,
+            strippedHeaderBytes = totalStripped,
             extractedAppPayload = extractedPayload,
             extractedAppSha256 = appSha,
             extractedAppCrc32 = appCrc,

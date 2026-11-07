@@ -115,7 +115,17 @@ class ExampleRobolectricTest {
         assertTrue(reenumerated.isReadyToFlash)
         assertTrue(reenumerated.profileType.isBootloaderMode)
 
-        // 4. Execute dual-protocol flash pipeline on the re-enumerated bootloader device
+        // 4. Verify injectWl82LoaderToSramWithOutcome & executeFlashPipeline with step-by-step telemetry logging
+        val loggedTags = mutableListOf<String>()
+        val outcome = usbEngine.injectWl82LoaderToSramWithOutcome(
+            deviceInfo = reenumerated,
+            preferredProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+        ) { _, tag, _, _ ->
+            loggedTags.add(tag)
+        }
+        assertTrue(outcome.success)
+        assertEquals(ActiveWireProtocol.USB_MIDI_SYSEX_OTA, outcome.resolvedProtocol)
+
         val testPayload = ChecksumEngine.buildDeterministicFirmwareBinary("sloop", "v1.0", "0x00004000", 16384)
         val flashOk = usbEngine.executeFlashPipeline(
             deviceInfo = reenumerated,
@@ -124,9 +134,12 @@ class ExampleRobolectricTest {
             targetOffsetHex = "0x00004000",
             expectedSha256 = ChecksumEngine.computeSha256(testPayload),
             expectedCrc32 = ChecksumEngine.computeCrc32(testPayload),
-            preferredProtocol = ActiveWireProtocol.AUTO_DUAL_PROTOCOL
+            injectRamLoaderFirst = false,
+            preferredProtocol = outcome.resolvedProtocol,
+            onLog = { _, tag, _, _ -> loggedTags.add(tag) }
         ) {}
         assertTrue(flashOk)
+        assertTrue(loggedTags.contains("STEP-06-VERIFY-REBOOT"))
     }
 
     @Test

@@ -1,1 +1,2 @@
+af5803c2cd3127abb6af7cd6876ca3f6d21f736bf5ea5d88f6bf1019e54be871  FM1-FirmwareHub-Unbricker-v6.1-sram-ota-fix-debug.apk
 51fd6a0a364afda68520f2d353044b9bfc611baf3535aae2720925093611f710  FM1-FirmwareHub-Unbricker-v6.0-wire-ota-scsi-debug.apk

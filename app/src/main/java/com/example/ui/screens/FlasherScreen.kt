@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Healing
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.UsbOff
 import androidx.compose.material.icons.filled.Warning
@@ -47,6 +49,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -57,6 +60,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.data.FirmwareEntity
+import com.example.data.FlashLogEntity
 import com.example.domain.ActiveWireProtocol
 import com.example.domain.ChecksumReport
 import com.example.domain.ConnectedUsbDeviceInfo
@@ -65,9 +69,13 @@ import com.example.domain.UsbProfileType
 import com.example.ui.FlashSessionUiState
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.SynthAmberWarn
+import com.example.ui.theme.SynthCrimsonError
 import com.example.ui.theme.SynthCyan
 import com.example.ui.theme.SynthOrange
 import com.example.ui.theme.SynthPhosphor
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun FlasherScreen(
@@ -78,6 +86,7 @@ fun FlasherScreen(
     simulatedProfile: UsbProfileType,
     suspectHardBrickCableConnected: Boolean,
     flashState: FlashSessionUiState,
+    recentLogs: List<FlashLogEntity> = emptyList(),
     onSetSimulationMode: (Boolean) -> Unit,
     onSelectSimulatedProfile: (UsbProfileType) -> Unit,
     onSetHardBrickSuspected: (Boolean) -> Unit,
@@ -89,8 +98,11 @@ fun FlasherScreen(
     onSelectWireProtocol: (ActiveWireProtocol) -> Unit = {},
     onBackupNow: () -> Unit,
     onImportLocalFile: () -> Unit,
-    onStartFlash: () -> Unit
+    onStartFlash: () -> Unit,
+    onCopyLogs: () -> Unit = {},
+    onOpenLogsScreen: () -> Unit = {}
 ) {
+    val timeFormatter = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.US) }
     val verdict = connectedDevice.diagnosticVerdict
     val statusAccentColor = when (verdict) {
         DeviceDiagnosticVerdict.NORMAL_MODE_READY -> SynthPhosphor
@@ -811,16 +823,57 @@ fun FlasherScreen(
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = doneMsg,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (flashState.isError) {
-                                    MaterialTheme.colorScheme.onErrorContainer
-                                } else {
-                                    SynthPhosphor
-                                },
-                                modifier = Modifier.padding(10.dp)
-                            )
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = doneMsg,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (flashState.isError) {
+                                        MaterialTheme.colorScheme.onErrorContainer
+                                    } else {
+                                        SynthPhosphor
+                                    }
+                                )
+                                if (flashState.isError) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = onCopyLogs,
+                                            modifier = Modifier.weight(1f),
+                                            border = BorderStroke(1.dp, SynthAmberWarn)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = "Копировать лог ошибки",
+                                                tint = SynthAmberWarn,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "Скопировать лог",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = SynthAmberWarn
+                                            )
+                                        }
+                                        OutlinedButton(
+                                            onClick = {
+                                                onSelectWireProtocol(ActiveWireProtocol.USB_MIDI_SYSEX_OTA)
+                                                onRefreshUsb()
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            border = BorderStroke(1.dp, SynthCyan)
+                                        ) {
+                                            Text(
+                                                text = "Режим SysEx OTA",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = SynthCyan
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -854,6 +907,138 @@ fun FlasherScreen(
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
+                    }
+                }
+            }
+        }
+
+        // 5. Live Step-by-Step USB OTG & Flash Telemetry Console right on FlasherScreen
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("flasher_live_log_card"),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, SynthCyan.copy(alpha = 0.65f))
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Default.Terminal,
+                                contentDescription = "Живой лог прошивки",
+                                tint = SynthCyan
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Живой лог шагов прошивки (USB OTG Trace)",
+                                    style = MaterialTheme.typography.titleMedium
+                                )
+                                Text(
+                                    text = "Пакеты SysEx, перехват после гашения экрана, MaxPacketSize и ответы пайпов",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.background,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (recentLogs.isEmpty()) {
+                                Text(
+                                    text = "[ОЖИДАНИЕ] Запустите сканирование USB OTG или прошивку для записи пошаговой телеметрии.",
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            } else {
+                                recentLogs.take(16).forEach { log ->
+                                    val badgeColor = when (log.level) {
+                                        "SUCCESS" -> SynthPhosphor
+                                        "USB_IO" -> SynthCyan
+                                        "CHECKSUM" -> SynthOrange
+                                        "WARN" -> SynthAmberWarn
+                                        "ERROR" -> SynthCrimsonError
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                    Column {
+                                        Text(
+                                            text = "[${timeFormatter.format(Date(log.timestamp))}] [${log.level}] [${log.tag}] ${log.message}",
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = badgeColor
+                                        )
+                                        if (log.hexPayload.isNotBlank()) {
+                                            Text(
+                                                text = "   ↳ ${log.hexPayload}",
+                                                fontFamily = JetBrainsMonoFontFamily,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onCopyLogs,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("copy_flasher_logs_button"),
+                            border = BorderStroke(1.dp, SynthCyan)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Копировать лог",
+                                tint = SynthCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Копировать лог", color = SynthCyan, style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        OutlinedButton(
+                            onClick = onOpenLogsScreen,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("open_full_logs_button"),
+                            border = BorderStroke(1.dp, SynthPhosphor)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Terminal,
+                                contentDescription = "Полный журнал",
+                                tint = SynthPhosphor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Вкладка Логи (${recentLogs.size})", color = SynthPhosphor, style = MaterialTheme.typography.labelSmall)
+                        }
                     }
                 }
             }

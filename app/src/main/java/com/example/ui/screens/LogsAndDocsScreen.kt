@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Share
@@ -64,6 +65,7 @@ fun LogsAndDocsScreen(
     onSelectLogLevel: (String) -> Unit,
     onSelectDesktopOs: (String) -> Unit,
     onExportLogs: () -> Unit,
+    onCopyLogs: () -> Unit = {},
     onShareScript: (String) -> Unit,
     onClearLogs: () -> Unit
 ) {
@@ -169,7 +171,7 @@ fun LogsAndDocsScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             } else {
-                                logs.take(12).forEach { log ->
+                                logs.take(40).forEach { log ->
                                     val badgeColor = when (log.level) {
                                         "SUCCESS" -> SynthPhosphor
                                         "USB_IO" -> SynthCyan
@@ -203,7 +205,7 @@ fun LogsAndDocsScreen(
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
                             onClick = onExportLogs,
@@ -218,23 +220,40 @@ fun LogsAndDocsScreen(
                             Icon(
                                 imageVector = Icons.Default.Share,
                                 contentDescription = "Экспорт логов",
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Экспорт лога (.log)", fontWeight = FontWeight.Bold)
+                            Text("Экспорт (.log)", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        OutlinedButton(
+                            onClick = onCopyLogs,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("copy_logs_clipboard_button"),
+                            border = BorderStroke(1.dp, SynthCyan)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ContentCopy,
+                                contentDescription = "Копировать в буфер",
+                                tint = SynthCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Копировать", color = SynthCyan, style = MaterialTheme.typography.labelSmall)
                         }
 
                         OutlinedButton(
                             onClick = onClearLogs,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(0.85f)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.DeleteSweep,
                                 contentDescription = "Очистить",
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(16.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Очистить")
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Очистить", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }

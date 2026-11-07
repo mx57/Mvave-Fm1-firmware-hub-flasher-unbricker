@@ -1,6 +1,8 @@
 package com.example
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -149,7 +151,7 @@ fun FirmwareHubApp(
                     UsbManager.ACTION_USB_DEVICE_ATTACHED,
                     UsbManager.ACTION_USB_DEVICE_DETACHED,
                     UsbFlashEngine.ACTION_USB_PERMISSION -> {
-                        viewModel.refreshUsbConnection(showToastOnScan = true)
+                        viewModel.onUsbBroadcastReceived(intent.action)
                     }
                 }
             }
@@ -229,6 +231,13 @@ fun FirmwareHubApp(
             putExtra(Intent.EXTRA_TEXT, body)
         }
         context.startActivity(Intent.createChooser(sendIntent, subject))
+    }
+
+    val copyLogsToClipboard: () -> Unit = {
+        val report = viewModel.buildFormattedLogsExport()
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        clipboard?.setPrimaryClip(ClipData.newPlainText("FM1 FirmwareHub Telemetry Log", report))
+        viewModel.notifyLogsCopiedToClipboard(logs.size)
     }
 
     val topStatusColor = when {
@@ -499,6 +508,7 @@ fun FirmwareHubApp(
                                 simulatedProfile = simulatedProfile,
                                 suspectHardBrickCableConnected = suspectHardBrickCableConnected,
                                 flashState = flashState,
+                                recentLogs = logs,
                                 onSetSimulationMode = viewModel::setSimulationMode,
                                 onSelectSimulatedProfile = viewModel::selectSimulatedProfile,
                                 onSetHardBrickSuspected = viewModel::setHardBrickCableSuspected,
@@ -514,6 +524,10 @@ fun FirmwareHubApp(
                                 },
                                 onStartFlash = {
                                     viewModel.startAutomatedFlashing(isUnbrickRecovery = false)
+                                },
+                                onCopyLogs = copyLogsToClipboard,
+                                onOpenLogsScreen = {
+                                    viewModel.navigateTo(AppDestination.LOGS_DOCS)
                                 }
                             )
 
@@ -598,6 +612,7 @@ fun FirmwareHubApp(
                                     val report = viewModel.buildFormattedLogsExport()
                                     shareText("FM1 FirmwareHub Session Log", report)
                                 },
+                                onCopyLogs = copyLogsToClipboard,
                                 onShareScript = { script ->
                                     shareText("M-VAVE FM-1 Cross-Platform Flash Script", script)
                                 },

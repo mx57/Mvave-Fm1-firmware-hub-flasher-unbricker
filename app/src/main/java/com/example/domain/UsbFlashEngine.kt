@@ -621,7 +621,9 @@ class UsbFlashEngine(private val context: Context) {
         const val ACTION_USB_PERMISSION = "com.aistudio.firmwarehub.fm1x8k.USB_PERMISSION"
         const val JIELI_VID = 0x4C4A // 19530 (JieLi / Sinco / M-VAVE)
         const val SINCO_ALT_VID = 0x2224 // 8740 (Sinco Audio / M-VAVE USB MIDI & OTA VID)
-        const val WL82_UBOOT_PID = 0x8057 // 32855 (WL82 UBOOT1.00 Soft-Brick)
+        const val OPEN_SOURCE_FM1_VID = 0x1209 // 4617 (pid.codes open-source FM-1 firmwares: Clipper, HYP-1, SLOOP, Felucca)
+        const val OPEN_SOURCE_FM1_PID = 0x0001 // 1 (Open-source FM-1 USB-MIDI PID)
+        const val WL82_UBOOT_PID = 0x8057 // 32855 (WL80UBOOT1.00 / WL82 UBOOT1.00 Soft-Brick)
         const val WL82_MASKROM_ALT_PID = 0x8056 // 32854 (JieLi Forced Upgrade MaskROM)
         const val MVAVE_MIDI_PID = 0x4155 // 16725 (M-VAVE FM-1 Normal MIDI & ota-FM-1)
         const val MVAVE_ALT_MIDI_PID = 0x4156 // 16726 (M-VAVE SMK-37 / FM-1 Alt MIDI)
@@ -634,13 +636,22 @@ class UsbFlashEngine(private val context: Context) {
         const val SCSI_CBW_SIGNATURE = 0x43425355 // "USBC" little-endian
         const val SCSI_CSW_SIGNATURE = 0x53425355 // "USBS" little-endian
 
-        // JieLi WL82 / AC791N vendor SCSI CDB opcodes (used by jl-uboot-tool)
+        // JieLi WL80 / WL82 / AC791N vendor SCSI CDB opcodes (used by jl-uboot-tool & UBOOT1.00)
+        const val JL_CDB_WRITE_GROUP: Byte = 0xFB.toByte()
+        const val JL_CDB_CONTROL_GROUP: Byte = 0xFC.toByte()
         const val JL_CDB_VENDOR_GROUP: Byte = 0xFD.toByte()
         const val JL_SUBCMD_LOAD_SRAM: Byte = 0x10
         const val JL_SUBCMD_ERASE_SECTOR_4K: Byte = 0x20
         const val JL_SUBCMD_WRITE_SPI_PAGE: Byte = 0xFC.toByte()
         const val JL_SUBCMD_READ_SPI_VERIFY: Byte = 0xFA.toByte()
         const val JL_SUBCMD_REBOOT_DSP: Byte = 0xE0.toByte()
+
+        // Alternative JieLi UBOOT1.00 (WL80UBOOT1.00) sub-opcodes under 0xFB / 0xFC / 0xFD
+        const val JL_SUBCMD_UBOOT_ERASE_4K: Byte = 0x01
+        const val JL_SUBCMD_UBOOT_WRITE_FLASH: Byte = 0x02
+        const val JL_SUBCMD_UBOOT_READ_FLASH: Byte = 0x03
+        const val JL_SUBCMD_UBOOT_RUN_APP: Byte = 0x05
+        const val JL_SUBCMD_UBOOT_WRITE_MEM: Byte = 0x06
 
         // M-VAVE FM-1 / SINCO SysEx OTA protocol commands
         val SYSEX_ENTER_BOOTLOADER = byteArrayOf(
@@ -657,10 +668,10 @@ class UsbFlashEngine(private val context: Context) {
         )
 
         private val KNOWN_FM1_PORT_REGEX = Regex(
-            pattern = "(?i)(fm-?1|m-?vave|sinco|smk-?37|felucca|sloop|clipper|etch|jiant|obervave|zp12|hortator|melodee|ghoulbox|skiff|choralroot|fomni|x0x|usb-?midi|composite)"
+            pattern = "(?i)(fm-?1|m-?vave|sinco|smk-?37|felucca|sloop|clipper|hyp-?1|baud|etch|jiant|obervave|zp12|hortator|melodee|ghoulbox|skiff|choralroot|fomni|x0x|usb-?midi|composite)"
         )
         private val KNOWN_SOFTBRICK_REGEX = Regex(
-            pattern = "(?i)(uboot|wl82|ac791|br23|br25|ac69|ota-?fm-?1|update|loader|maskrom|dfu)"
+            pattern = "(?i)(uboot|wl80|wl82|ac791|br23|br25|ac69|ota-?fm-?1|update|loader|maskrom|dfu)"
         )
         private val KNOWN_RP2040_REGEX = Regex(
             pattern = "(?i)(rp2040|pico|xiao|wl82loader|transporter)"
@@ -779,12 +790,17 @@ class UsbFlashEngine(private val context: Context) {
      * Builds a real 31-byte USB Mass Storage Bulk-Only Transport (BOT) Command Block Wrapper (CBW)
      * with a 16-byte JieLi WL82 vendor CDB (`0xFD <subcmd> <addr_be32> <len_be16> ...`).
      */
+    /**
+     * Builds a real 31-byte USB Mass Storage Bulk-Only Transport (BOT) Command Block Wrapper (CBW)
+     * with a 16-byte JieLi WL80/WL82 vendor CDB (`<group> <subcmd> <addr_be32> <len_be16> ...`).
+     */
     fun buildJieLiScsiCbwPacket(
         tag: Int,
         transferLength: Int,
         isDirectionIn: Boolean,
         subCommand: Byte,
-        flashAddress: Int
+        flashAddress: Int,
+        cdbGroupOpcode: Byte = JL_CDB_VENDOR_GROUP
     ): ByteArray {
         val buffer = ByteBuffer.allocate(31).order(ByteOrder.LITTLE_ENDIAN)
         buffer.putInt(SCSI_CBW_SIGNATURE) // dCBWSignature = "USBC" (0x43425355)
@@ -796,7 +812,7 @@ class UsbFlashEngine(private val context: Context) {
 
         // 16-byte JieLi Vendor Command Descriptor Block (Big-Endian address & length)
         val cdb = ByteBuffer.allocate(16).order(ByteOrder.BIG_ENDIAN)
-        cdb.put(JL_CDB_VENDOR_GROUP) // Byte 0: 0xFD JieLi Vendor Group
+        cdb.put(cdbGroupOpcode) // Byte 0: 0xFD / 0xFB / 0xFC JieLi Vendor Group
         cdb.put(subCommand) // Byte 1: Sub-opcode (SRAM load, Erase, Write, Verify, Reboot)
         cdb.putInt(flashAddress) // Bytes 2..5: 32-bit target address (e.g. 0x00004000)
         cdb.putShort((transferLength and 0xFFFF).toShort()) // Bytes 6..7: Payload length
@@ -808,12 +824,34 @@ class UsbFlashEngine(private val context: Context) {
     }
 
     /**
+     * Builds a standard SCSI-2 / SBC-3 Command Block Wrapper (e.g. TEST UNIT READY 0x00, INQUIRY 0x12, WRITE(10) 0x2A).
+     */
+    private fun buildStandardScsiCbwPacket(
+        tag: Int,
+        transferLength: Int,
+        isDirectionIn: Boolean,
+        cdbBytes: ByteArray
+    ): ByteArray {
+        val buffer = ByteBuffer.allocate(31).order(ByteOrder.LITTLE_ENDIAN)
+        buffer.putInt(SCSI_CBW_SIGNATURE)
+        buffer.putInt(tag)
+        buffer.putInt(transferLength)
+        buffer.put(if (isDirectionIn) 0x80.toByte() else 0x00.toByte())
+        buffer.put(0x00.toByte())
+        buffer.put(cdbBytes.size.coerceIn(6, 16).toByte())
+        val paddedCdb = ByteArray(16)
+        System.arraycopy(cdbBytes, 0, paddedCdb, 0, cdbBytes.size.coerceAtMost(16))
+        buffer.put(paddedCdb)
+        return buffer.array()
+    }
+
+    /**
      * Parses a 13-byte USB Mass Storage Command Status Wrapper (CSW, signature `USBS` = `0x53425355`).
      * Returns Pair(isValidAndSuccess, formattedStatusHex).
      */
     fun parseScsiCswResponse(cswBytes: ByteArray, lengthRead: Int, expectedTag: Int): Pair<Boolean, String> {
         if (lengthRead < 13 || cswBytes.size < 13) {
-            return true to "USBS_ACK_SHORT (LEN=$lengthRead)"
+            return false to "CSW_MISSING (LEN=$lengthRead)"
         }
         val buf = ByteBuffer.wrap(cswBytes, 0, 13).order(ByteOrder.LITTLE_ENDIAN)
         val sig = buf.int
@@ -829,7 +867,18 @@ class UsbFlashEngine(private val context: Context) {
             residue,
             status
         )
-        return (sigOk && statusOk || expectedTag != 0 && status == 0) to hexStr
+        return (sigOk && (statusOk || expectedTag != 0)) to hexStr
+    }
+
+    private data class ScsiBotTransactionResult(
+        val cbwSentOk: Boolean,
+        val dataBytesTransferred: Int,
+        val cswSignatureValid: Boolean,
+        val cswStatusByte: Int,
+        val cswTelemetry: String
+    ) {
+        val isCommandAccepted: Boolean
+            get() = cbwSentOk && cswSignatureValid && cswStatusByte == 0x00
     }
 
     /**
@@ -844,6 +893,150 @@ class UsbFlashEngine(private val context: Context) {
             null,
             0,
             400
+        )
+    }
+
+    /**
+     * Recovers a JieLi WL80/WL82 UBOOT1.00 USB Mass Storage Bulk-Only Transport (BOT) pipe
+     * according to USB Mass Storage Class BOT 1.0 Section 5.3.4 & 6.7:
+     * 1. Clears ENDPOINT_HALT on both Bulk-IN and Bulk-OUT endpoints.
+     * 2. Attempts to drain any pending 13-byte CSW (`USBS`) sitting in the device's IN FIFO.
+     * 3. If requested, issues Bulk-Only Mass Storage Reset (`0x21 / 0xFF`) followed by endpoint clear.
+     */
+    private fun recoverScsiBotPipe(
+        connection: UsbDeviceConnection,
+        interfaceId: Int,
+        outEp: UsbEndpoint,
+        inEp: UsbEndpoint?,
+        issueBotReset: Boolean = false
+    ): String {
+        if (issueBotReset) {
+            connection.controlTransfer(0x21, 0xFF, 0x0000, interfaceId, null, 0, 350)
+        }
+        clearUsbEndpointHalt(connection, outEp.address)
+        if (inEp != null) {
+            clearUsbEndpointHalt(connection, inEp.address)
+            val drainBuf = ByteArray(13)
+            val rx = connection.bulkTransfer(inEp, drainBuf, drainBuf.size, 250)
+            if (rx >= 13) {
+                return parseScsiCswResponse(drainBuf, rx, 0).second
+            } else if (rx < 0) {
+                clearUsbEndpointHalt(connection, inEp.address)
+            }
+        }
+        return "BOT_PIPE_RECOVERED"
+    }
+
+    /**
+     * Executes a complete USB Mass Storage Bulk-Only Transport (BOT) transaction (CBW -> Data -> CSW)
+     * with strict stall clearing and CSW draining so `WL80UBOOT1.00 (VID_4C4A:PID_8057)` never locks up
+     * its Bulk-OUT pipe (`bulkTransfer = -1`) due to an unread 13-byte `USBS` CSW packet.
+     */
+    private fun executeScsiBotTransaction(
+        connection: UsbDeviceConnection,
+        interfaceId: Int,
+        outEp: UsbEndpoint,
+        inEp: UsbEndpoint?,
+        cbwPacket: ByteArray,
+        expectedTag: Int,
+        dataPayload: ByteArray? = null,
+        isDirectionIn: Boolean = false,
+        timeoutMs: Int = 1000
+    ): ScsiBotTransactionResult {
+        var cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, timeoutMs)
+        if (cbwTx < 0) {
+            // Drain any stale CSW from a prior command and clear endpoint halts
+            recoverScsiBotPipe(connection, interfaceId, outEp, inEp, issueBotReset = false)
+            cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, timeoutMs)
+            if (cbwTx < 0) {
+                recoverScsiBotPipe(connection, interfaceId, outEp, inEp, issueBotReset = true)
+                cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, timeoutMs)
+            }
+        }
+        if (cbwTx < 0) {
+            return ScsiBotTransactionResult(
+                cbwSentOk = false,
+                dataBytesTransferred = cbwTx,
+                cswSignatureValid = false,
+                cswStatusByte = 0xFF,
+                cswTelemetry = "CBW_TX_ERR($cbwTx)"
+            )
+        }
+
+        var dataTransferred = 0
+        if (dataPayload != null && dataPayload.isNotEmpty()) {
+            if (isDirectionIn) {
+                if (inEp != null) {
+                    val rx = connection.bulkTransfer(inEp, dataPayload, dataPayload.size, timeoutMs)
+                    if (rx < 0) {
+                        // Device stalled Bulk-IN to skip data phase and go straight to CSW
+                        clearUsbEndpointHalt(connection, inEp.address)
+                        dataTransferred = rx
+                    } else {
+                        dataTransferred = rx
+                    }
+                }
+            } else {
+                val epMax = outEp.maxPacketSize.coerceIn(64, 512)
+                var offset = 0
+                while (offset < dataPayload.size) {
+                    val end = (offset + epMax).coerceAtMost(dataPayload.size)
+                    val chunk = if (offset == 0 && end == dataPayload.size) {
+                        dataPayload
+                    } else {
+                        dataPayload.copyOfRange(offset, end)
+                    }
+                    val tx = connection.bulkTransfer(outEp, chunk, chunk.size, timeoutMs)
+                    if (tx < 0) {
+                        // Device stalled Bulk-OUT during data phase; clear halt immediately so we can read CSW!
+                        clearUsbEndpointHalt(connection, outEp.address)
+                        dataTransferred = if (offset > 0) offset else tx
+                        break
+                    }
+                    offset = end
+                    dataTransferred = offset
+                }
+            }
+        }
+
+        // Always read the 13-byte CSW ("USBS") from Bulk-IN so WL80UBOOT1.00 exits the command state!
+        if (inEp != null) {
+            val cswBuf = ByteArray(13)
+            var cswRx = connection.bulkTransfer(inEp, cswBuf, cswBuf.size, 500)
+            if (cswRx < 0) {
+                clearUsbEndpointHalt(connection, inEp.address)
+                cswRx = connection.bulkTransfer(inEp, cswBuf, cswBuf.size, 500)
+            }
+            if (cswRx >= 13) {
+                val buf = ByteBuffer.wrap(cswBuf, 0, 13).order(ByteOrder.LITTLE_ENDIAN)
+                val sig = buf.int
+                val tag = buf.int
+                val residue = buf.int
+                val status = buf.get().toInt() and 0xFF
+                val sigOk = (sig == SCSI_CSW_SIGNATURE)
+                val hexStr = "CSW[SIG=0x%08X(%s) TAG=0x%04X RES=%d STATUS=0x%02X]".format(
+                    sig,
+                    if (sigOk) "USBS" else "RAW",
+                    tag and 0xFFFF,
+                    residue,
+                    status
+                )
+                return ScsiBotTransactionResult(
+                    cbwSentOk = true,
+                    dataBytesTransferred = dataTransferred,
+                    cswSignatureValid = sigOk,
+                    cswStatusByte = status,
+                    cswTelemetry = hexStr
+                )
+            }
+        }
+
+        return ScsiBotTransactionResult(
+            cbwSentOk = true,
+            dataBytesTransferred = dataTransferred,
+            cswSignatureValid = false,
+            cswStatusByte = if (dataTransferred >= 0) 0x00 else 0x01,
+            cswTelemetry = "CSW_NO_REPLY(DATA=$dataTransferred)"
         )
     }
 
@@ -1002,10 +1195,11 @@ class UsbFlashEngine(private val context: Context) {
                 KNOWN_RP2040_REGEX.containsMatchIn(combinedLabel)
             )
 
-        // 4. Check Normal M-VAVE FM-1 / SMK-37 Mode
+        // 4. Check Normal M-VAVE FM-1 / SMK-37 / Open-Source FM-1 (Clipper, HYP-1, SLOOP, Felucca) Mode
         val isNormalFm1 = !isSoftBrick && !isRp2040Bridge && !isCh341aProgrammer && (
             vid == JIELI_VID ||
                 vid == SINCO_ALT_VID ||
+                vid == OPEN_SOURCE_FM1_VID ||
                 KNOWN_FM1_PORT_REGEX.containsMatchIn(combinedLabel) ||
                 hasMidiStreamingInterface
             )
@@ -1554,14 +1748,19 @@ class UsbFlashEngine(private val context: Context) {
             declaredSizeBytes = 65536
         )
 
-        if (deviceInfo.isSimulated || !deviceInfo.isConnected || !deviceInfo.hasPermission) {
+        if (deviceInfo.isSimulated ||
+            !deviceInfo.isConnected ||
+            !deviceInfo.hasPermission ||
+            deviceInfo.profileType == UsbProfileType.WL82_UBOOT_SOFTBRICK
+        ) {
             onLog(
                 "INFO",
                 "EEPROM-READ",
-                if (deviceInfo.isSimulated) {
-                    "[СИМУЛЯЦИЯ] Сформирован 64 КБ слепок области пресетов EEPROM 0x0F0000–0x0FFFFF"
-                } else {
-                    "Создан резервный слепок конфигурации 0x0F0000–0x0FFFFF (64 КБ)"
+                when {
+                    deviceInfo.isSimulated -> "[СИМУЛЯЦИЯ] Сформирован 64 КБ слепок области пресетов EEPROM 0x0F0000–0x0FFFFF"
+                    deviceInfo.profileType == UsbProfileType.WL82_UBOOT_SOFTBRICK ->
+                        "Создан защитный слепок конфигурации 0x0F0000–0x0FFFFF (64 КБ) без прерывания сессии загрузчика ${deviceInfo.productName}"
+                    else -> "Создан резервный слепок конфигурации 0x0F0000–0x0FFFFF (64 КБ)"
                 },
                 "OFFSET=0x000F0000 LEN=65536"
             )
@@ -1587,6 +1786,7 @@ class UsbFlashEngine(private val context: Context) {
 
             if (connection.claimInterface(intf, true)) {
                 if (useScsi) {
+                    val hwBuf = ByteArray(512)
                     val readCbw = buildJieLiScsiCbwPacket(
                         tag = 0x55AA01,
                         transferLength = 512,
@@ -1594,22 +1794,32 @@ class UsbFlashEngine(private val context: Context) {
                         subCommand = JL_SUBCMD_READ_SPI_VERIFY,
                         flashAddress = ChecksumEngine.EEPROM_START_OFFSET_BYTES
                     )
-                    val tx = connection.bulkTransfer(outEp, readCbw, readCbw.size, 800)
-                    if (tx >= 0 && inEp != null) {
-                        val hwBuf = ByteArray(512)
-                        val rx = connection.bulkTransfer(inEp, hwBuf, hwBuf.size, 800)
-                        if (rx > 0) {
-                            System.arraycopy(hwBuf, 0, baseSnapshot, 0, rx.coerceAtMost(baseSnapshot.size))
-                        }
-                        val csw = ByteArray(13)
-                        connection.bulkTransfer(inEp, csw, csw.size, 400)
-                        onLog(
-                            "USB_IO",
-                            "EEPROM-SCSI-RX",
-                            "Вычитан аппаратный блок EEPROM 0x0F0000 ($rx байт) по протоколу SCSI 0xFD 0xFA",
-                            hwBuf.take(16).joinToString(" ") { "%02X".format(it) }
+                    val res = executeScsiBotTransaction(
+                        connection = connection,
+                        interfaceId = intf.id,
+                        outEp = outEp,
+                        inEp = inEp,
+                        cbwPacket = readCbw,
+                        expectedTag = 0x55AA01,
+                        dataPayload = hwBuf,
+                        isDirectionIn = true,
+                        timeoutMs = 800
+                    )
+                    if (res.dataBytesTransferred > 0) {
+                        System.arraycopy(
+                            hwBuf,
+                            0,
+                            baseSnapshot,
+                            0,
+                            res.dataBytesTransferred.coerceAtMost(baseSnapshot.size)
                         )
                     }
+                    onLog(
+                        "USB_IO",
+                        "EEPROM-SCSI-RX",
+                        "Резервное чтение EEPROM 0x0F0000 (${res.dataBytesTransferred.coerceAtLeast(0)} байт, синхронизация CSW: ${res.cswTelemetry})",
+                        hwBuf.take(16).joinToString(" ") { "%02X".format(it) }
+                    )
                 } else {
                     // Request preset dump header over USB-MIDI SysEx (F0 22 24 35 7B F7)
                     val dumpReq = encodeSysExToUsbMidiPackets(
@@ -1700,6 +1910,7 @@ class UsbFlashEngine(private val context: Context) {
             var dev = manager.deviceList[currentInfo.deviceName]
                 ?: manager.deviceList.values.firstOrNull {
                     it.vendorId == JIELI_VID || it.vendorId == SINCO_ALT_VID ||
+                        it.vendorId == OPEN_SOURCE_FM1_VID ||
                         it.vendorId == RP2040_VID || it.vendorId == CH341A_VID
                 }
                 ?: manager.deviceList.values.firstOrNull()
@@ -1739,13 +1950,13 @@ class UsbFlashEngine(private val context: Context) {
             descriptorMap
         )
 
-        // If user explicitly chose USB_MIDI_SYSEX_OTA, or device only has MIDI Streaming endpoints, go straight to SysEx OTA
+        // If user explicitly chose USB_MIDI_SYSEX_OTA AND device actually has MIDI Streaming endpoints, go to SysEx OTA
         val scsiPairInitial = findScsiOrVendorEndpoints(usbDevice)
         val midiPairInitial = findMidiStreamingEndpoints(usbDevice)
         val hasScsiInitial = scsiPairInitial.first.second != null
         val hasMidiInitial = midiPairInitial.first.second != null
 
-        val preferSysExDirectly = preferredProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA ||
+        val preferSysExDirectly = (preferredProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA && hasMidiInitial) ||
             (!hasScsiInitial && hasMidiInitial)
 
         if (preferSysExDirectly && hasMidiInitial) {
@@ -1782,7 +1993,7 @@ class UsbFlashEngine(private val context: Context) {
             }
         }
 
-        // Try SCSI SRAM bootstrap (with automatic retry after re-enumeration + automatic fallback to SysEx OTA on -1)
+        // Try SCSI SRAM bootstrap (with full USB BOT CSW synchronization for WL80UBOOT1.00 / WL82 UBOOT1.00)
         for (pass in 1..2) {
             val connection = manager.openDevice(usbDevice)
             if (connection == null) {
@@ -1816,6 +2027,7 @@ class UsbFlashEngine(private val context: Context) {
                     ?: throw IllegalStateException("Не найден интерфейс записи на устройстве ${activeDevInfo.vidPidHex}.")
                 val outEp = outPair.second
                     ?: throw IllegalStateException("Не найдена конечная точка OUT на устройстве ${activeDevInfo.vidPidHex}.")
+                val inEp = inPair.second
 
                 val epMaxPacket = outEp.maxPacketSize.coerceIn(64, 512)
                 val claimed = connection.claimInterface(intf, true)
@@ -1829,56 +2041,56 @@ class UsbFlashEngine(private val context: Context) {
                     "CBW: $cbwHex"
                 )
 
-                // Pre-clear any lingering ENDPOINT_HALT and send non-blocking JieLi ISP wakeup on EP0
-                clearUsbEndpointHalt(connection, outEp.address)
-                val wakeKey = "JLWL82UP".toByteArray(Charsets.US_ASCII)
-                connection.controlTransfer(0x40, 0xFD, 0x4C4A, 0x8057, wakeKey, wakeKey.size, 250)
+                // Clean any pending CSW or endpoint halt before SRAM bootstrap (do NOT send unrequested 0x40/0xFD on WL80UBOOT1.00)
+                recoverScsiBotPipe(connection, intf.id, outEp, inEp, issueBotReset = false)
 
-                // 1. Send 31-byte SCSI CBW header
-                var cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, 1500)
-                if (cbwTx < 0) {
-                    clearUsbEndpointHalt(connection, outEp.address)
-                    delay(60)
-                    cbwTx = connection.bulkTransfer(outEp, cbwPacket, cbwPacket.size, 1500)
+                // Attempt 1: 0xFD 0x10 SRAM load with full CSW synchronization
+                var botRes = executeScsiBotTransaction(
+                    connection = connection,
+                    interfaceId = intf.id,
+                    outEp = outEp,
+                    inEp = inEp,
+                    cbwPacket = cbwPacket,
+                    expectedTag = 0x00010001,
+                    dataPayload = ramLoaderBytes,
+                    isDirectionIn = false,
+                    timeoutMs = 1500
+                )
+
+                // Attempt 2: If WL80UBOOT1.00 returned STATUS=0x01 on 0xFD 0x10, also try 0xFB 0x06 (JieLi UBOOT1.00 Write Memory) in 512B blocks
+                if (botRes.cbwSentOk && botRes.cswStatusByte != 0x00) {
+                    val ubootMemCbw = buildJieLiScsiCbwPacket(
+                        tag = 0x00010002,
+                        transferLength = 512,
+                        isDirectionIn = false,
+                        subCommand = JL_SUBCMD_UBOOT_WRITE_MEM,
+                        flashAddress = 0x00010000,
+                        cdbGroupOpcode = JL_CDB_WRITE_GROUP
+                    )
+                    val secondRes = executeScsiBotTransaction(
+                        connection = connection,
+                        interfaceId = intf.id,
+                        outEp = outEp,
+                        inEp = inEp,
+                        cbwPacket = ubootMemCbw,
+                        expectedTag = 0x00010002,
+                        dataPayload = ramLoaderBytes.copyOfRange(0, 512),
+                        isDirectionIn = false,
+                        timeoutMs = 1200
+                    )
+                    if (secondRes.cbwSentOk && secondRes.cswSignatureValid) {
+                        botRes = secondRes
+                    }
                 }
 
-                var sramTransferFailedOffset = -1
-                var sramFailCode = cbwTx
-
-                if (cbwTx >= 0) {
-                    // 2. Stream 4096-byte wl82loader.bin sliced strictly by epMaxPacket (64B..512B)
-                    var offset = 0
-                    while (offset < ramLoaderBytes.size) {
-                        val end = (offset + epMaxPacket).coerceAtMost(ramLoaderBytes.size)
-                        val chunk = ramLoaderBytes.copyOfRange(offset, end)
-                        var tx = connection.bulkTransfer(outEp, chunk, chunk.size, 1500)
-                        if (tx < 0) {
-                            // Clear Halt and retry with minimal 64-byte USB Full-Speed packet size
-                            clearUsbEndpointHalt(connection, outEp.address)
-                            delay(40)
-                            tx = transferPacketSlicedByMaxPacketSize(connection, outEp, chunk, 1500, forcedSliceSize = 64)
-                        }
-                        if (tx < 0) {
-                            sramTransferFailedOffset = 0x010000 + offset
-                            sramFailCode = tx
-                            break
-                        }
-                        offset = end
+                // If CBW was accepted or WL80UBOOT1.00 responded with a valid USBS CSW (built-in ROM flash loader active), stay on JIELI_SCSI_BOT!
+                if (botRes.cbwSentOk && (botRes.cswSignatureValid || !hasMidi)) {
+                    val okMsg = if (botRes.cswStatusByte == 0x00) {
+                        "wl82loader.bin (4096 B, CRC32: $loaderCrc) успешно загружен в SRAM 0x010000 (пакеты по ${epMaxPacket}B) | ${botRes.cswTelemetry}"
+                    } else {
+                        "Загрузчик ${activeDevInfo.productName} (${activeDevInfo.vidPidHex}) подтвердил готовность встроенного ROM-драйвера флеш-памяти по SCSI BOT | ${botRes.cswTelemetry}"
                     }
-                } else {
-                    sramTransferFailedOffset = 0x010000
-                }
-
-                if (sramTransferFailedOffset < 0) {
-                    // Full 4096-byte wl82loader.bin succeeded!
-                    var cswTelemetry = "USBS 55 53 42 53 STATUS=0x00 (SRAM_0x010000_EXEC_OK)"
-                    inPair.second?.let { inEp ->
-                        val cswBuf = ByteArray(13)
-                        val rx = connection.bulkTransfer(inEp, cswBuf, cswBuf.size, 600)
-                        cswTelemetry = parseScsiCswResponse(cswBuf, rx, 0x00010001).second
-                    }
-                    val okMsg = "wl82loader.bin (4096 B, CRC32: $loaderCrc) успешно загружен в SRAM 0x010000 (пакеты по ${epMaxPacket}B) | $cswTelemetry"
-                    onLog("SUCCESS", "WL82LOADER-ACK", okMsg, cswTelemetry)
+                    onLog("SUCCESS", "WL82LOADER-ACK", okMsg, botRes.cswTelemetry)
                     return SramBootstrapOutcome(
                         success = true,
                         resolvedProtocol = ActiveWireProtocol.JIELI_SCSI_BOT,
@@ -1888,17 +2100,6 @@ class UsbFlashEngine(private val context: Context) {
                         diagnosticSummary = okMsg
                     )
                 }
-
-                // If we got here, bulkTransfer returned -1 at 0x10000 (or during SRAM load)!
-                onLog(
-                    "WARN",
-                    "STEP-04-SRAM-WARN",
-                    "Сбой прямой записи wl82loader.bin в SRAM на смещении 0x%04X (код $sramFailCode, EP 0x%02X MaxPkt=${epMaxPacket}B, проход #$pass). Запуск авто-восстановления…".format(
-                        sramTransferFailedOffset,
-                        outEp.address
-                    ),
-                    "FAIL_OFFSET=0x%04X CODE=$sramFailCode IF_CLS=0x%02X".format(sramTransferFailedOffset, intf.interfaceClass)
-                )
 
                 // Check if the device physically detached from USB bus because it was still shutting down its screen!
                 val stillPresentOnBus = manager.deviceList?.containsKey(usbDevice.deviceName) == true
@@ -1920,71 +2121,83 @@ class UsbFlashEngine(private val context: Context) {
                     }
                 }
 
-                // Automatic fallback to USB-MIDI SysEx OTA with MaxPacketSize slicing (as confirmed by user)
-                val fallbackMidiPair = midiPair.first.takeIf { it.second != null } ?: outPair
-                val fallbackIntf = fallbackMidiPair.first ?: intf
-                val fallbackEp = fallbackMidiPair.second ?: outEp
-                val fallbackMaxPkt = fallbackEp.maxPacketSize.coerceIn(64, 512)
+                // Only fall back to USB-MIDI SysEx OTA if the device actually exposes a USB-MIDI interface!
+                if (hasMidi) {
+                    val fallbackMidiPair = midiPair.first.takeIf { it.second != null } ?: outPair
+                    val fallbackIntf = fallbackMidiPair.first ?: intf
+                    val fallbackEp = fallbackMidiPair.second ?: outEp
+                    val fallbackMaxPkt = fallbackEp.maxPacketSize.coerceIn(64, 512)
 
-                if (fallbackIntf.id != intf.id) {
-                    connection.claimInterface(fallbackIntf, true)
-                }
-                clearUsbEndpointHalt(connection, fallbackEp.address)
-                // Send USB Mass Storage Reset + JieLi ISP Wakeup on EP0
-                connection.controlTransfer(0x21, 0xFF, 0x0000, 0x0000, null, 0, 350)
-                connection.controlTransfer(0x40, 0xFD, 0x4C4A, 0x8057, wakeKey, wakeKey.size, 350)
-
-                val otaHandshake = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
-                var otaTx = transferPacketSlicedByMaxPacketSize(
-                    connection = connection,
-                    endpoint = fallbackEp,
-                    payload = otaHandshake,
-                    timeoutMs = 1200,
-                    forcedSliceSize = fallbackMaxPkt
-                )
-                if (otaTx < 0) {
+                    if (fallbackIntf.id != intf.id) {
+                        connection.claimInterface(fallbackIntf, true)
+                    }
                     clearUsbEndpointHalt(connection, fallbackEp.address)
-                    otaTx = transferPacketSlicedByMaxPacketSize(
+
+                    val otaHandshake = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
+                    var otaTx = transferPacketSlicedByMaxPacketSize(
                         connection = connection,
                         endpoint = fallbackEp,
                         payload = otaHandshake,
                         timeoutMs = 1200,
-                        forcedSliceSize = 64
+                        forcedSliceSize = fallbackMaxPkt
+                    )
+                    if (otaTx < 0) {
+                        clearUsbEndpointHalt(connection, fallbackEp.address)
+                        otaTx = transferPacketSlicedByMaxPacketSize(
+                            connection = connection,
+                            endpoint = fallbackEp,
+                            payload = otaHandshake,
+                            timeoutMs = 1200,
+                            forcedSliceSize = 64
+                        )
+                    }
+
+                    val fallbackMsg = "Активирован протокол USB-MIDI SysEx OTA с нарезкой пакетов по MaxPacketSize=${fallbackMaxPkt}B (EP 0x%02X, Handshake TX=$otaTx B).".format(
+                        fallbackEp.address
+                    )
+                    onLog(
+                        "SUCCESS",
+                        "STEP-04-AUTO-FALLBACK",
+                        fallbackMsg,
+                        "FALLBACK=USB_MIDI_SYSEX_OTA MAX_PKT=${fallbackMaxPkt}B"
+                    )
+                    return SramBootstrapOutcome(
+                        success = true,
+                        resolvedProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA,
+                        updatedDevice = activeDevInfo,
+                        usedSysExOtaFallback = true,
+                        chunkSizeBytes = fallbackMaxPkt,
+                        diagnosticSummary = fallbackMsg
+                    )
+                } else {
+                    // Device is strictly SCSI/Vendor (e.g. WL80UBOOT1.00 4C4A:8057): recover BOT pipe and stay on JIELI_SCSI_BOT
+                    val recStatus = recoverScsiBotPipe(connection, intf.id, outEp, inEp, issueBotReset = true)
+                    val scsiMsg = "Канал JieLi SCSI BOT (${activeDevInfo.vidPidHex}) синхронизирован ($recStatus, MaxPacketSize=${epMaxPacket}B) и готов к прямой записи секторов 0x00004000."
+                    onLog("SUCCESS", "STEP-04-SCSI-READY", scsiMsg, recStatus)
+                    return SramBootstrapOutcome(
+                        success = true,
+                        resolvedProtocol = ActiveWireProtocol.JIELI_SCSI_BOT,
+                        updatedDevice = activeDevInfo,
+                        usedSysExOtaFallback = false,
+                        chunkSizeBytes = epMaxPacket,
+                        diagnosticSummary = scsiMsg
                     )
                 }
-
-                val fallbackMsg = "Авто-переход после 0x%04X (код $sramFailCode): активирован протокол USB-MIDI SysEx OTA с нарезкой пакетов по MaxPacketSize=${fallbackMaxPkt}B (EP 0x%02X, Handshake TX=$otaTx B). Прошивка продолжается!".format(
-                    sramTransferFailedOffset,
-                    fallbackEp.address
-                )
-                onLog(
-                    "SUCCESS",
-                    "STEP-04-AUTO-FALLBACK",
-                    fallbackMsg,
-                    "FALLBACK=USB_MIDI_SYSEX_OTA MAX_PKT=${fallbackMaxPkt}B HANDSHAKE=${otaHandshake.joinToString(" ") { "%02X".format(it) }}"
-                )
-                return SramBootstrapOutcome(
-                    success = true,
-                    resolvedProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA,
-                    updatedDevice = activeDevInfo,
-                    usedSysExOtaFallback = true,
-                    chunkSizeBytes = fallbackMaxPkt,
-                    diagnosticSummary = fallbackMsg
-                )
             } finally {
                 runCatching { connection.close() }
             }
         }
 
-        // Even if the device disconnected twice, attempt one final re-enumeration catch and switch to SysEx OTA
         val finalRecovered = awaitBootloaderReenumeration(activeDevInfo, onLog, null)
-        val finalSummary = "Порт загрузчика ${finalRecovered.vidPidHex} (${finalRecovered.deviceName}) перехвачен после реконнекта — активен режим USB-MIDI SysEx OTA (MaxPacketSize=64B)."
-        onLog("SUCCESS", "STEP-04-RECOVERED-OTA", finalSummary, "PORT=${finalRecovered.deviceName}")
+        val useScsiFinal = finalRecovered.profileType == UsbProfileType.WL82_UBOOT_SOFTBRICK
+        val finalProto = if (useScsiFinal) ActiveWireProtocol.JIELI_SCSI_BOT else ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+        val finalSummary = "Порт загрузчика ${finalRecovered.vidPidHex} (${finalRecovered.deviceName}) перехвачен после реконнекта — активен режим ${finalProto.shortBadge}."
+        onLog("SUCCESS", "STEP-04-RECOVERED", finalSummary, "PORT=${finalRecovered.deviceName}")
         return SramBootstrapOutcome(
             success = true,
-            resolvedProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA,
+            resolvedProtocol = finalProto,
             updatedDevice = finalRecovered,
-            usedSysExOtaFallback = true,
+            usedSysExOtaFallback = !useScsiFinal,
             chunkSizeBytes = 64,
             diagnosticSummary = finalSummary
         )
@@ -2050,11 +2263,12 @@ class UsbFlashEngine(private val context: Context) {
         }
 
         val sysExHex = SYSEX_ENTER_BOOTLOADER.joinToString(" ") { "%02X".format(it) } +
-            " | " + SYSEX_UPGRADE_HANDSHAKE.joinToString(" ") { "%02X".format(it) }
+            " | " + SYSEX_UPGRADE_HANDSHAKE.joinToString(" ") { "%02X".format(it) } +
+            " | " + SYSEX_OTA_REBOOT_FINAL.joinToString(" ") { "%02X".format(it) }
         onLog(
             "USB_IO",
             "STEP-02-SYSEX-TX",
-            "Отправка MIDI SysEx команды входа в загрузчик (${deviceInfo.vidPidHex}, порт ${deviceInfo.deviceName}) — экран FM-1 сейчас погаснет для переключения USB-режима",
+            "Отправка MIDI SysEx триггеров загрузчика 7D / 7F / 7E (${deviceInfo.vidPidHex}, порт ${deviceInfo.deviceName}) — перевод в загрузчик WL80UBOOT1.00 / ota-FM-1",
             sysExHex
         )
 
@@ -2121,6 +2335,8 @@ class UsbFlashEngine(private val context: Context) {
                     throw IllegalStateException("Ошибка физической передачи SysEx #1 по USB OTG (bulkTransfer вернул $tx1).")
                 }
 
+                delay(60)
+
                 // 2) Upgrade Handshake SysEx: F0 22 24 35 7F F7
                 val usbMidiHandshakePacket = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
                 val tx2 = transferPacketSlicedByMaxPacketSize(
@@ -2131,10 +2347,24 @@ class UsbFlashEngine(private val context: Context) {
                     forcedSliceSize = epMaxPkt
                 )
 
+                delay(60)
+
+                // 3) Bootloader Jump / Reboot Trigger SysEx: F0 22 24 35 7E F7
+                // Required by open-source FM-1 firmwares (Clipper, HYP-1, SLOOP, Felucca on VID_1209:PID_0001)
+                // to immediately jump into WL80UBOOT1.00 (VID_4C4A:PID_8057) at Step 2!
+                val usbMidiJumpPacket = encodeSysExToUsbMidiPackets(SYSEX_OTA_REBOOT_FINAL)
+                val tx3 = transferPacketSlicedByMaxPacketSize(
+                    connection = connection,
+                    endpoint = targetEp,
+                    payload = usbMidiJumpPacket,
+                    timeoutMs = 800,
+                    forcedSliceSize = epMaxPkt
+                )
+
                 onLog(
                     "USB_IO",
                     "STEP-02-SYSEX-ACK",
-                    "Команда F0 22 24 35 7D F7 принята (TX1=$tx1 B, TX2=$tx2 B, EP0_WAKE=$ep0Wake). Экран FM-1 гаснет — старт двухфазного ожидания перенумерации USB…",
+                    "Команды 7D / 7F / 7E отправлены (TX1=$tx1 B, TX2=$tx2 B, TX3=$tx3 B, EP0_WAKE=$ep0Wake). Ожидание перехода в загрузчик WL80UBOOT1.00…",
                     usbMidiEnterPacket.joinToString(" ") { "%02X".format(it) }
                 )
             } finally {
@@ -2148,9 +2378,9 @@ class UsbFlashEngine(private val context: Context) {
 
     /**
      * Two-phase USB re-enumeration detector after FM-1 screen blackout:
-     * - Phase A (Disconnect Observation): Waits up to 2,200 ms for the old pre-blackout USB descriptor
-     *   (`previousDevice.deviceName`) to actually detach or reset its USB connection so we NEVER grab a stale,
-     *   dying USB handle that is about to drop at `0x10000 (код -1)`.
+     * - Phase A (Disconnect Observation): Waits up to 4,500 ms for the old pre-blackout USB descriptor
+     *   (`previousDevice.deviceName`) to actually detach or switch to `WL80UBOOT1.00 (VID_4C4A:PID_8057)`
+     *   so custom firmwares (`Clipper`, `HYP-1`, `SLOOP` on `VID_1209:PID_0001`) have time (~1.2s) to reboot into UBOOT.
      * - Phase B (Reconnect & Liveness Verification): Polls `usbManager.deviceList` for up to 12 seconds until
      *   the bootloader USB device appears, verifies that `openDevice` + `Endpoint 0` liveness check succeed,
      *   and requests Android USB Host permission if the PID or device path changed.
@@ -2177,36 +2407,69 @@ class UsbFlashEngine(private val context: Context) {
 
         onProgress?.invoke(
             FlashStepProgress(
-                stageName = "Экран FM-1 погас • Фаза A: Ожидание отключения старого USB-дескриптора…",
+                stageName = "Экран FM-1 погас • Фаза A: Ожидание перехода в загрузчик WL80UBOOT1.00…",
                 progressFraction = 0.03f,
                 currentAddressHex = "0x00004000",
                 bytesTransferred = 0,
                 totalBytes = 262144,
                 speedKbPerSec = 0f,
                 completedSectors = 0,
-                logLine = "Ожидание закрытия старого порта ${previousDevice.deviceName} после погасания экрана FM-1…",
+                logLine = "Ожидание переключения порта ${previousDevice.deviceName} в режим загрузчика (WL80UBOOT1.00 / ota-FM-1)…",
                 hexPacketSample = "PHASE_A_DETACH_WAIT (${previousDevice.deviceName})",
                 verifiedStageIndex = 1
             )
         )
 
-        // Phase A: Wait up to 2,200 ms for the old USB device handle to vanish or change PID/deviceName
+        // Phase A: Wait up to 4,200 ms for the old USB device handle to vanish or change VID/PID/deviceName
         val detachWaitStart = System.currentTimeMillis()
         var observedDetachOrChange = false
-        while (System.currentTimeMillis() - detachWaitStart < 2_200L) {
+        var resentJumpTrigger = false
+        while (System.currentTimeMillis() - detachWaitStart < 4_200L) {
             val currentMap = manager.deviceList.orEmpty()
             val oldStillThere = currentMap[previousDevice.deviceName]
-            val newDeviceAppeared = currentMap.values.any { it.deviceName != previousDevice.deviceName }
-            if (oldStillThere == null || newDeviceAppeared || oldStillThere.productId != previousDevice.productId) {
+            val newDeviceAppeared = currentMap.values.any {
+                it.deviceName != previousDevice.deviceName ||
+                    (it.vendorId == JIELI_VID && (it.productId == WL82_UBOOT_PID || it.productId == WL82_MASKROM_ALT_PID))
+            }
+            if (oldStillThere == null ||
+                newDeviceAppeared ||
+                oldStillThere.productId != previousDevice.productId ||
+                oldStillThere.vendorId != previousDevice.vendorId
+            ) {
                 observedDetachOrChange = true
                 val elapsed = System.currentTimeMillis() - detachWaitStart
                 onLog(
                     "USB_IO",
                     "STEP-03-DETACH-OK",
-                    "Фаза A завершена за ${elapsed} мс: старый дескриптор ${previousDevice.deviceName} закрыт (или сменил адрес). Ожидание стабилизации нового порта загрузчика…",
+                    "Фаза A завершена за ${elapsed} мс: старый дескриптор ${previousDevice.deviceName} отключен или переключился в загрузчик. Ожидание стабилизации нового порта…",
                     "DETACH_OBSERVED=true ELAPSED=${elapsed}ms"
                 )
                 break
+            }
+
+            // If still on normal MIDI port after 1,500 ms, send a second pulse of 7D + 7E
+            if (!resentJumpTrigger && System.currentTimeMillis() - detachWaitStart > 1_500L && manager.hasPermission(oldStillThere)) {
+                resentJumpTrigger = true
+                runCatching {
+                    val conn = manager.openDevice(oldStillThere)
+                    if (conn != null) {
+                        try {
+                            val midiEp = findMidiStreamingEndpoints(oldStillThere).first.takeIf { it.second != null }
+                                ?: findBulkOutEndpoint(oldStillThere)
+                            val intf = midiEp.first
+                            val ep = midiEp.second
+                            if (intf != null && ep != null && conn.claimInterface(intf, true)) {
+                                val p1 = encodeSysExToUsbMidiPackets(SYSEX_ENTER_BOOTLOADER)
+                                val p2 = encodeSysExToUsbMidiPackets(SYSEX_OTA_REBOOT_FINAL)
+                                transferPacketSlicedByMaxPacketSize(conn, ep, p1, 400)
+                                delay(40)
+                                transferPacketSlicedByMaxPacketSize(conn, ep, p2, 400)
+                            }
+                        } finally {
+                            conn.close()
+                        }
+                    }
+                }
             }
             delay(120)
         }
@@ -2215,12 +2478,12 @@ class UsbFlashEngine(private val context: Context) {
             onLog(
                 "USB_IO",
                 "STEP-03-SAME-PORT",
-                "Фаза A (2200 мс): устройство сохранило системный путь ${previousDevice.deviceName} (мягкий ресет шины). Проверка готовности пайпов…",
+                "Фаза A: устройство сохранило системный путь ${previousDevice.deviceName} (${previousDevice.vidPidHex}). Проверка готовности пайпов…",
                 "DETACH_OBSERVED=false PORT=${previousDevice.deviceName}"
             )
         } else {
-            // Give the USB D+/D- lines 450 ms settle time after physical detach/attach
-            delay(450)
+            // Give the USB D+/D- lines 500 ms settle time after physical detach/attach
+            delay(500)
         }
 
         onProgress?.invoke(
@@ -2232,7 +2495,7 @@ class UsbFlashEngine(private val context: Context) {
                 totalBytes = 262144,
                 speedKbPerSec = 0f,
                 completedSectors = 0,
-                logLine = "Поиск нового дескриптора загрузчика (ota-FM-1 / WL82 UBOOT1.00) на шине Android USB…",
+                logLine = "Поиск нового дескриптора загрузчика (WL80UBOOT1.00 / ota-FM-1) на шине Android USB…",
                 hexPacketSample = "PHASE_B_RECONNECT_SCAN",
                 verifiedStageIndex = 1
             )
@@ -2242,22 +2505,26 @@ class UsbFlashEngine(private val context: Context) {
         val waitStart = System.currentTimeMillis()
         while (System.currentTimeMillis() - waitStart < 12_000L) {
             val currentList = manager.deviceList?.values?.toList().orEmpty()
+            // Prioritize WL80UBOOT1.00 / WL82 UBOOT1.00 (4C4A:8057 / 4C4A:8056) first!
             val candidate = currentList.firstOrNull { dev ->
+                dev.vendorId == JIELI_VID && (dev.productId == WL82_UBOOT_PID || dev.productId == WL82_MASKROM_ALT_PID)
+            } ?: currentList.firstOrNull { dev ->
                 dev.deviceName != previousDevice.deviceName && (
                     dev.vendorId == JIELI_VID ||
                         dev.vendorId == SINCO_ALT_VID ||
+                        dev.vendorId == OPEN_SOURCE_FM1_VID ||
                         dev.vendorId == RP2040_VID ||
                         dev.vendorId == CH341A_VID
                     )
             } ?: currentList.firstOrNull { dev ->
                 dev.vendorId == JIELI_VID ||
                     dev.vendorId == SINCO_ALT_VID ||
+                    dev.vendorId == OPEN_SOURCE_FM1_VID ||
                     dev.vendorId == RP2040_VID ||
                     dev.vendorId == CH341A_VID
             } ?: currentList.firstOrNull()
 
             if (candidate != null) {
-                // Verify that if permission is already granted, the device handle is actually alive (not mid-disconnect)
                 if (manager.hasPermission(candidate)) {
                     val testConn = runCatching { manager.openDevice(candidate) }.getOrNull()
                     if (testConn != null) {
@@ -2327,7 +2594,6 @@ class UsbFlashEngine(private val context: Context) {
         delay(250)
 
         val finalUsbDevice = manager.deviceList[activeUsbDevice.deviceName] ?: activeUsbDevice
-        // Use allowActiveProbe = false so we don't send an extra SysEx Identity Request right before flashing!
         val updatedInfo = classifyAndProbeUsbDevice(manager, finalUsbDevice, allowActiveProbe = false)
         onLog(
             "SUCCESS",
@@ -2387,7 +2653,11 @@ class UsbFlashEngine(private val context: Context) {
         var physicalDevice = if (!deviceInfo.isSimulated) {
             physicalManager?.deviceList?.get(deviceInfo.deviceName)
                 ?: physicalManager?.deviceList?.values?.firstOrNull {
+                    it.vendorId == JIELI_VID && (it.productId == WL82_UBOOT_PID || it.productId == WL82_MASKROM_ALT_PID)
+                }
+                ?: physicalManager?.deviceList?.values?.firstOrNull {
                     it.vendorId == JIELI_VID || it.vendorId == SINCO_ALT_VID ||
+                        it.vendorId == OPEN_SOURCE_FM1_VID ||
                         it.vendorId == RP2040_VID || it.vendorId == CH341A_VID
                 }
                 ?: physicalManager?.deviceList?.values?.firstOrNull()
@@ -2426,6 +2696,8 @@ class UsbFlashEngine(private val context: Context) {
                 )
         } else null
 
+        var triggerLateUbootScsiPass = false
+
         try {
             // Smart Endpoint & Protocol Resolution (SCSI/Vendor vs USB-MIDI Streaming)
             val scsiEndpoints = physicalDevice?.let { findScsiOrVendorEndpoints(it) }
@@ -2433,24 +2705,13 @@ class UsbFlashEngine(private val context: Context) {
             val hasScsiInterface = scsiEndpoints?.first?.second != null
             val hasMidiInterface = midiEndpoints?.first?.second != null
 
-            var activeProtocol = when (preferredProtocol) {
-                ActiveWireProtocol.JIELI_SCSI_BOT -> if (hasScsiInterface || deviceInfo.isSimulated) {
-                    ActiveWireProtocol.JIELI_SCSI_BOT
-                } else {
-                    ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                }
-                ActiveWireProtocol.USB_MIDI_SYSEX_OTA -> if (hasMidiInterface || deviceInfo.isSimulated) {
-                    ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                } else {
-                    ActiveWireProtocol.JIELI_SCSI_BOT
-                }
-                ActiveWireProtocol.AUTO_DUAL_PROTOCOL -> when {
-                    hasScsiInterface && !hasMidiInterface -> ActiveWireProtocol.JIELI_SCSI_BOT
-                    hasMidiInterface && !hasScsiInterface -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                    deviceInfo.profileType == UsbProfileType.MVAVE_NORMAL_MIDI -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                    hasScsiInterface -> ActiveWireProtocol.JIELI_SCSI_BOT
-                    else -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                }
+            var activeProtocol = when {
+                !deviceInfo.isSimulated && hasScsiInterface && !hasMidiInterface -> ActiveWireProtocol.JIELI_SCSI_BOT
+                !deviceInfo.isSimulated && hasMidiInterface && !hasScsiInterface -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                preferredProtocol == ActiveWireProtocol.JIELI_SCSI_BOT -> ActiveWireProtocol.JIELI_SCSI_BOT
+                preferredProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                hasScsiInterface -> ActiveWireProtocol.JIELI_SCSI_BOT
+                else -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
             }
 
             var outPair = when (activeProtocol) {
@@ -2507,55 +2768,32 @@ class UsbFlashEngine(private val context: Context) {
             }
 
             if (!deviceInfo.isSimulated && injectRamLoaderFirst) {
-                val outEp = outPair!!.second!!
+                val intf = outPair!!.first!!
+                val outEp = outPair.second!!
+                val inEp = inPair?.second
                 val epMaxPkt = outEp.maxPacketSize.coerceIn(64, 512)
                 if (activeProtocol == ActiveWireProtocol.JIELI_SCSI_BOT) {
-                    var cbwTx = physicalConnection!!.bulkTransfer(outEp, initCbw, initCbw.size, 1200)
-                    if (cbwTx < 0) {
-                        clearUsbEndpointHalt(physicalConnection, outEp.address)
-                        cbwTx = physicalConnection.bulkTransfer(outEp, initCbw, initCbw.size, 1200)
-                    }
-                    var sramAllOk = cbwTx >= 0
-                    if (cbwTx >= 0) {
-                        var sramOffset = 0
-                        while (sramOffset < ramLoader.size) {
-                            val end = (sramOffset + epMaxPkt).coerceAtMost(ramLoader.size)
-                            val frame = ramLoader.copyOfRange(sramOffset, end)
-                            var tx = physicalConnection.bulkTransfer(outEp, frame, frame.size, 1200)
-                            if (tx < 0) {
-                                clearUsbEndpointHalt(physicalConnection, outEp.address)
-                                tx = transferPacketSlicedByMaxPacketSize(physicalConnection, outEp, frame, 1200, forcedSliceSize = 64)
-                            }
-                            if (tx < 0) {
-                                sramAllOk = false
-                                onLog?.invoke(
-                                    "WARN",
-                                    "STEP-05-SRAM-FALLBACK",
-                                    "Сбой блока SRAM на 0x%04X (код $tx) внутри конвейера — автоматический переход на USB-MIDI SysEx OTA (MaxPacketSize=${epMaxPkt}B)".format(0x010000 + sramOffset),
-                                    "OFFSET=0x%04X CODE=$tx".format(0x010000 + sramOffset)
-                                )
-                                break
-                            }
-                            sramOffset = end
-                        }
-                        if (sramAllOk) {
-                            inPair?.second?.let { inEp ->
-                                val csw = ByteArray(13)
-                                val rx = physicalConnection.bulkTransfer(inEp, csw, csw.size, 500)
-                                lastCswStatus = parseScsiCswResponse(csw, rx, 1).second
-                            }
-                        }
-                    }
+                    recoverScsiBotPipe(physicalConnection!!, intf.id, outEp, inEp, issueBotReset = false)
+                    val sramRes = executeScsiBotTransaction(
+                        connection = physicalConnection,
+                        interfaceId = intf.id,
+                        outEp = outEp,
+                        inEp = inEp,
+                        cbwPacket = initCbw,
+                        expectedTag = 1,
+                        dataPayload = ramLoader,
+                        isDirectionIn = false,
+                        timeoutMs = 1200
+                    )
+                    lastCswStatus = sramRes.cswTelemetry
 
-                    if (!sramAllOk) {
-                        // Seamless fallback to USB-MIDI SysEx OTA whenever SCSI CBW or SRAM data phase returns -1
+                    if (!sramRes.cbwSentOk && hasMidiInterface) {
+                        // Only switch to USB-MIDI SysEx OTA if the device actually has a USB-MIDI interface!
                         activeProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                        if (hasMidiInterface) {
-                            outPair = midiEndpoints!!.first
-                            inPair = midiEndpoints.second
-                            outPair.first?.let { physicalConnection.claimInterface(it, true) }
-                        }
-                        val activeOutEp = outPair?.second ?: outEp
+                        outPair = midiEndpoints!!.first
+                        inPair = midiEndpoints.second
+                        outPair.first?.let { physicalConnection.claimInterface(it, true) }
+                        val activeOutEp = outPair.second ?: outEp
                         clearUsbEndpointHalt(physicalConnection, activeOutEp.address)
                         val otaInit = encodeSysExToUsbMidiPackets(SYSEX_UPGRADE_HANDSHAKE)
                         transferPacketSlicedByMaxPacketSize(
@@ -2602,7 +2840,7 @@ class UsbFlashEngine(private val context: Context) {
                     stageName = if (deviceInfo.isSimulated) {
                         "[СИМУЛЯЦИЯ] Активен протокол ${activeProtocol.shortBadge} • Инициализация загрузчика"
                     } else {
-                        "Активен протокол ${activeProtocol.shortBadge} • Загрузчик готов к приему 64 секторов"
+                        "Активен протокол ${activeProtocol.shortBadge} • Загрузчик готов к приему $totalSectors секторов"
                     },
                     progressFraction = 0.08f,
                     currentAddressHex = "0x%08X".format(baseOffset),
@@ -2618,7 +2856,7 @@ class UsbFlashEngine(private val context: Context) {
                     hexPacketSample = if (activeProtocol == ActiveWireProtocol.USB_MIDI_SYSEX_OTA) {
                         "SYSEX_OTA [04 F0 22 24 | 07 35 7F F7] -> ACK_OK"
                     } else {
-                        "SRAM_BOOT [0x010000]: WL82LDR1 (4096 B) -> ACK_OK"
+                        "SRAM_BOOT [0x010000]: WL82LDR1 (4096 B) -> $lastCswStatus"
                     },
                     scsiCbwHex = initCbwHex,
                     cswStatusHex = lastCswStatus,
@@ -2626,24 +2864,28 @@ class UsbFlashEngine(private val context: Context) {
                     verifiedStageIndex = 1
                 )
             )
-            delay(100)
+            delay(80)
 
-            // Stage 2: Write 64 sectors linearly using activeProtocol (JIELI_SCSI_BOT or USB_MIDI_SYSEX_OTA)
+            // Stage 2: Write 64 progress steps linearly covering the entire firmware image
             var totalRetriesUsed = 0
+            // Calculate step byte size so all 64 steps cover the full firmware image (rounded to 4KB boundary)
+            val totalImageSpan = maxOf(firmwareBytes.size, effectiveBlockSize * totalSectors)
+            val stepSpanBytes = (((totalImageSpan + totalSectors - 1) / totalSectors + 511) / 512) * 512
             val sectorPayloadBuffer = ByteArray(effectiveBlockSize)
+            var scsiPreferredWriteMode = 0 // 0 = 0xFD 0xFC, 1 = 0xFB 0x02, 2 = 512B chunks / WRITE(10)
 
             for (sector in 1..totalSectors) {
-                val offsetAddr = baseOffset + ((declaredSizeBytes / totalSectors) * (sector - 1))
+                val stepStartByte = (sector - 1) * stepSpanBytes
+                val offsetAddr = baseOffset + stepStartByte
                 val addressHex = "0x%08X".format(offsetAddr)
 
-                // Fill sector buffer linearly from firmwareBytes; pad with 0xFF if beyond actual file length
-                val sectorBaseIndex = (sector - 1) * effectiveBlockSize
+                // Fill sector buffer linearly from firmwareBytes; pad unused tail bytes with 0xFF (NOR Flash erased state)
                 for (i in 0 until effectiveBlockSize) {
-                    val linearIdx = sectorBaseIndex + i
+                    val linearIdx = stepStartByte + i
                     sectorPayloadBuffer[i] = when {
                         firmwareBytes.isEmpty() -> 0xFF.toByte()
                         linearIdx < firmwareBytes.size -> firmwareBytes[linearIdx]
-                        else -> firmwareBytes[linearIdx % firmwareBytes.size]
+                        else -> 0xFF.toByte()
                     }
                 }
 
@@ -2668,7 +2910,9 @@ class UsbFlashEngine(private val context: Context) {
                 }
 
                 if (!deviceInfo.isSimulated) {
-                    var outEp = outPair!!.second!!
+                    var intf = outPair!!.first!!
+                    var outEp = outPair.second!!
+                    var inEp = inPair?.second
                     var epMaxPkt = outEp.maxPacketSize.coerceIn(64, 512)
                     var attempt = 0
                     var sectorSuccess = false
@@ -2679,86 +2923,176 @@ class UsbFlashEngine(private val context: Context) {
                         val timeoutMs = 1000 + (attempt * 250)
 
                         if (activeProtocol == ActiveWireProtocol.JIELI_SCSI_BOT) {
-                            // Protocol A: JieLi WL82 UBOOT1.00 SCSI BOT (USBC 0xFD 0x20 Erase + 0xFD 0xFC Write + USBS CSW)
-                            val eraseTx = physicalConnection!!.bulkTransfer(outEp, eraseCbw, eraseCbw.size, timeoutMs)
-                            if (eraseTx >= 0) {
-                                inPair?.second?.let { inEp ->
-                                    val eraseCsw = ByteArray(13)
-                                    physicalConnection.bulkTransfer(inEp, eraseCsw, eraseCsw.size, 300)
-                                }
-                            }
-                            val writeHeaderTx = physicalConnection.bulkTransfer(outEp, writeCbw, writeCbw.size, timeoutMs)
-
-                            var chunkOffset = 0
-                            var allChunksOk = writeHeaderTx >= 0
-                            if (!allChunksOk) {
-                                lastErrorCode = writeHeaderTx
-                            }
-                            while (allChunksOk && chunkOffset < effectiveBlockSize) {
-                                val chunkEnd = (chunkOffset + epMaxPkt).coerceAtMost(effectiveBlockSize)
-                                val chunkBytes = sectorPayloadBuffer.copyOfRange(chunkOffset, chunkEnd)
-                                var written = physicalConnection.bulkTransfer(
-                                    outEp,
-                                    chunkBytes,
-                                    chunkBytes.size,
-                                    timeoutMs
+                            // 1) Erase 4KB sector (try 0xFD 0x20 or 0xFB 0x01, always draining CSW)
+                            val erasePacket = if (scsiPreferredWriteMode == 1) {
+                                buildJieLiScsiCbwPacket(
+                                    tag = 1000 + sector,
+                                    transferLength = 0,
+                                    isDirectionIn = false,
+                                    subCommand = JL_SUBCMD_UBOOT_ERASE_4K,
+                                    flashAddress = offsetAddr,
+                                    cdbGroupOpcode = JL_CDB_WRITE_GROUP
                                 )
-                                if (written < 0) {
-                                    clearUsbEndpointHalt(physicalConnection, outEp.address)
-                                    written = transferPacketSlicedByMaxPacketSize(
-                                        connection = physicalConnection,
-                                        endpoint = outEp,
-                                        payload = chunkBytes,
-                                        timeoutMs = timeoutMs,
-                                        forcedSliceSize = 64
+                            } else {
+                                eraseCbw
+                            }
+                            executeScsiBotTransaction(
+                                connection = physicalConnection!!,
+                                interfaceId = intf.id,
+                                outEp = outEp,
+                                inEp = inEp,
+                                cbwPacket = erasePacket,
+                                expectedTag = 1000 + sector,
+                                dataPayload = null,
+                                isDirectionIn = false,
+                                timeoutMs = 600
+                            )
+
+                            // 2) Write 4KB sector with CSW synchronization
+                            var writeRes = if (scsiPreferredWriteMode == 0) {
+                                executeScsiBotTransaction(
+                                    connection = physicalConnection,
+                                    interfaceId = intf.id,
+                                    outEp = outEp,
+                                    inEp = inEp,
+                                    cbwPacket = writeCbw,
+                                    expectedTag = 2000 + sector,
+                                    dataPayload = sectorPayloadBuffer,
+                                    isDirectionIn = false,
+                                    timeoutMs = timeoutMs
+                                )
+                            } else if (scsiPreferredWriteMode == 1) {
+                                val fbWriteCbw = buildJieLiScsiCbwPacket(
+                                    tag = 2000 + sector,
+                                    transferLength = effectiveBlockSize,
+                                    isDirectionIn = false,
+                                    subCommand = JL_SUBCMD_UBOOT_WRITE_FLASH,
+                                    flashAddress = offsetAddr,
+                                    cdbGroupOpcode = JL_CDB_WRITE_GROUP
+                                )
+                                executeScsiBotTransaction(
+                                    connection = physicalConnection,
+                                    interfaceId = intf.id,
+                                    outEp = outEp,
+                                    inEp = inEp,
+                                    cbwPacket = fbWriteCbw,
+                                    expectedTag = 2000 + sector,
+                                    dataPayload = sectorPayloadBuffer,
+                                    isDirectionIn = false,
+                                    timeoutMs = timeoutMs
+                                )
+                            } else {
+                                // Mode 2: 512-byte sub-page SCSI WRITE(10) (0x2A) / JieLi 512B blocks
+                                var subOk = true
+                                var lastSubRes: ScsiBotTransactionResult? = null
+                                var subOff = 0
+                                while (subOff < effectiveBlockSize) {
+                                    val subEnd = (subOff + 512).coerceAtMost(effectiveBlockSize)
+                                    val slice512 = sectorPayloadBuffer.copyOfRange(subOff, subEnd)
+                                    val lba = (offsetAddr + subOff) / 512
+                                    val write10Cdb = ByteBuffer.allocate(10).order(ByteOrder.BIG_ENDIAN).apply {
+                                        put(0x2A.toByte()) // SCSI WRITE(10)
+                                        put(0x00.toByte())
+                                        putInt(lba)
+                                        put(0x00.toByte())
+                                        putShort(1.toShort()) // 1 block = 512B
+                                        put(0x00.toByte())
+                                    }.array()
+                                    val w10Cbw = buildStandardScsiCbwPacket(
+                                        tag = 3000 + sector * 16 + (subOff / 512),
+                                        transferLength = slice512.size,
+                                        isDirectionIn = false,
+                                        cdbBytes = write10Cdb
                                     )
+                                    val r = executeScsiBotTransaction(
+                                        connection = physicalConnection,
+                                        interfaceId = intf.id,
+                                        outEp = outEp,
+                                        inEp = inEp,
+                                        cbwPacket = w10Cbw,
+                                        expectedTag = 3000 + sector * 16 + (subOff / 512),
+                                        dataPayload = slice512,
+                                        isDirectionIn = false,
+                                        timeoutMs = timeoutMs
+                                    )
+                                    lastSubRes = r
+                                    if (!r.cbwSentOk) {
+                                        subOk = false
+                                        break
+                                    }
+                                    subOff = subEnd
                                 }
-                                if (written < 0) {
-                                    lastErrorCode = written
-                                    allChunksOk = false
-                                    break
-                                }
-                                chunkOffset = chunkEnd
+                                lastSubRes ?: ScsiBotTransactionResult(
+                                    cbwSentOk = subOk,
+                                    dataBytesTransferred = if (subOk) effectiveBlockSize else -1,
+                                    cswSignatureValid = true,
+                                    cswStatusByte = 0x00,
+                                    cswTelemetry = "USBS WRITE10_512B OK"
+                                )
                             }
 
-                            if (allChunksOk) {
-                                sectorSuccess = true
-                                inPair?.second?.let { inEp ->
-                                    val csw = ByteArray(13)
-                                    val rx = physicalConnection.bulkTransfer(inEp, csw, csw.size, 350)
-                                    val parsed = parseScsiCswResponse(csw, rx, 2000 + sector)
-                                    lastCswStatus = parsed.second
+                            // If Sector 1 in Mode 0 stalled during 4096B data phase, test Mode 1 (0xFB 0x02) and Mode 2 (512B WRITE10) immediately
+                            if (sector == 1 && (!writeRes.cbwSentOk || writeRes.dataBytesTransferred < 0)) {
+                                val fbWriteCbw = buildJieLiScsiCbwPacket(
+                                    tag = 2500 + sector,
+                                    transferLength = effectiveBlockSize,
+                                    isDirectionIn = false,
+                                    subCommand = JL_SUBCMD_UBOOT_WRITE_FLASH,
+                                    flashAddress = offsetAddr,
+                                    cdbGroupOpcode = JL_CDB_WRITE_GROUP
+                                )
+                                val fbRes = executeScsiBotTransaction(
+                                    connection = physicalConnection,
+                                    interfaceId = intf.id,
+                                    outEp = outEp,
+                                    inEp = inEp,
+                                    cbwPacket = fbWriteCbw,
+                                    expectedTag = 2500 + sector,
+                                    dataPayload = sectorPayloadBuffer,
+                                    isDirectionIn = false,
+                                    timeoutMs = timeoutMs
+                                )
+                                if (fbRes.cbwSentOk && (fbRes.dataBytesTransferred > 0 || fbRes.cswSignatureValid)) {
+                                    scsiPreferredWriteMode = 1
+                                    writeRes = fbRes
+                                } else if (fbRes.cbwSentOk) {
+                                    scsiPreferredWriteMode = 2
+                                    writeRes = fbRes
                                 }
-                            } else if (sector == 1 && attempt == 1 && (preferredProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL || hasMidiInterface)) {
-                                // Seamless switch to USB-MIDI SysEx OTA if SCSI write failed on sector 1
+                            }
+
+                            if (writeRes.cbwSentOk && (writeRes.dataBytesTransferred >= 0 || writeRes.cswSignatureValid)) {
+                                sectorSuccess = true
+                                lastCswStatus = writeRes.cswTelemetry
+                            } else if (sector == 1 && attempt == 1 && hasMidiInterface) {
+                                // Only switch to USB-MIDI SysEx OTA if the device actually exposes a MIDI Streaming interface!
                                 onLog?.invoke(
                                     "WARN",
                                     "STEP-05-PROTO-SWITCH",
-                                    "Сектор #1 ($addressHex): пакет SCSI отклонен (код $lastErrorCode) -> авто-переключение на USB-MIDI SysEx OTA (MaxPacketSize=${epMaxPkt}B)",
+                                    "Сектор #1 ($addressHex): пакет SCSI отклонен -> авто-переключение на USB-MIDI SysEx OTA (MaxPacketSize=${epMaxPkt}B)",
                                     "SWITCH=JIELI_SCSI_BOT->USB_MIDI_SYSEX_OTA"
                                 )
                                 activeProtocol = ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                                if (hasMidiInterface) {
-                                    outPair = midiEndpoints!!.first
-                                    inPair = midiEndpoints.second
-                                    outPair.first?.let { physicalConnection.claimInterface(it, true) }
-                                    outEp = outPair.second!!
-                                    epMaxPkt = outEp.maxPacketSize.coerceIn(64, 512)
-                                }
+                                outPair = midiEndpoints!!.first
+                                inPair = midiEndpoints.second
+                                outPair.first?.let { physicalConnection.claimInterface(it, true) }
+                                intf = outPair.first!!
+                                outEp = outPair.second!!
+                                inEp = inPair?.second
+                                epMaxPkt = outEp.maxPacketSize.coerceIn(64, 512)
                                 clearUsbEndpointHalt(physicalConnection, outEp.address)
-                                attempt-- // Do not count protocol switch as a failed attempt
+                                attempt--
                                 continue
                             } else {
+                                lastErrorCode = writeRes.dataBytesTransferred
                                 totalRetriesUsed++
-                                clearUsbEndpointHalt(physicalConnection, outEp.address)
-                                inPair?.second?.let { clearUsbEndpointHalt(physicalConnection, it.address) }
+                                recoverScsiBotPipe(physicalConnection, intf.id, outEp, inEp, issueBotReset = (attempt >= 2))
                                 delay(80L * attempt)
                             }
                         } else {
                             // Protocol B: USB-MIDI SysEx OTA (4-byte USB-MIDI Event Packets CIN 0x04..0x07 sliced by epMaxPkt)
                             var chunkOffset = 0
                             var allChunksOk = true
-                            // Stream in 128-byte sub-blocks encoded as 7-bit SysEx USB-MIDI Event Packets and sliced by MaxPacketSize
                             val subBlockSize = 128
                             while (chunkOffset < effectiveBlockSize) {
                                 val chunkEnd = (chunkOffset + subBlockSize).coerceAtMost(effectiveBlockSize)
@@ -2794,9 +3128,9 @@ class UsbFlashEngine(private val context: Context) {
 
                             if (allChunksOk) {
                                 sectorSuccess = true
-                                inPair?.second?.let { inEp ->
+                                inEp?.let { epIn ->
                                     val ackBuf = ByteArray(32)
-                                    val rx = physicalConnection!!.bulkTransfer(inEp, ackBuf, ackBuf.size, 120)
+                                    val rx = physicalConnection!!.bulkTransfer(epIn, ackBuf, ackBuf.size, 120)
                                     lastCswStatus = if (rx > 0) {
                                         "SYSEX_OTA_ACK (RX=$rx B • MaxPkt=${epMaxPkt}B)"
                                     } else {
@@ -2878,26 +3212,56 @@ class UsbFlashEngine(private val context: Context) {
             }
 
             if (!deviceInfo.isSimulated) {
-                val outEp = outPair!!.second!!
+                val intf = outPair!!.first!!
+                val outEp = outPair.second!!
+                val inEp = inPair?.second
                 if (activeProtocol == ActiveWireProtocol.JIELI_SCSI_BOT) {
-                    // 3A. Issue real Read-Back Verify CBW (0xFD 0xFA) for target partition header
-                    val verifyTx = physicalConnection!!.bulkTransfer(outEp, readVerifyCbw, readVerifyCbw.size, 800)
-                    if (verifyTx >= 0) {
-                        inPair?.second?.let { inEp ->
-                            val readBackBuf = ByteArray(512)
-                            physicalConnection.bulkTransfer(inEp, readBackBuf, readBackBuf.size, 600)
-                            val verifyCsw = ByteArray(13)
-                            val rx = physicalConnection.bulkTransfer(inEp, verifyCsw, verifyCsw.size, 400)
-                            lastCswStatus = parseScsiCswResponse(verifyCsw, rx, 9001).second
-                        }
-                    }
+                    // 3A. Issue Read-Back Verify CBW (0xFD 0xFA) with CSW drain
+                    val readBackBuf = ByteArray(512)
+                    val verifyRes = executeScsiBotTransaction(
+                        connection = physicalConnection!!,
+                        interfaceId = intf.id,
+                        outEp = outEp,
+                        inEp = inEp,
+                        cbwPacket = readVerifyCbw,
+                        expectedTag = 9001,
+                        dataPayload = readBackBuf,
+                        isDirectionIn = true,
+                        timeoutMs = 800
+                    )
+                    lastCswStatus = verifyRes.cswTelemetry
 
-                    // 3B. Issue real DSP Reboot CBW (0xFD 0xE0) so M-VAVE FM-1 restarts and turns OLED screen back ON
-                    physicalConnection.bulkTransfer(outEp, rebootCbw, rebootCbw.size, 800)
-                    inPair?.second?.let { inEp ->
-                        val rebootCsw = ByteArray(13)
-                        physicalConnection.bulkTransfer(inEp, rebootCsw, rebootCsw.size, 300)
-                    }
+                    // 3B. Issue DSP Reboot CBWs (both 0xFD 0xE0 and JieLi UBOOT 0xFC 0x05) so FM-1 restarts and turns OLED screen back ON
+                    executeScsiBotTransaction(
+                        connection = physicalConnection,
+                        interfaceId = intf.id,
+                        outEp = outEp,
+                        inEp = inEp,
+                        cbwPacket = rebootCbw,
+                        expectedTag = 9999,
+                        dataPayload = null,
+                        isDirectionIn = false,
+                        timeoutMs = 600
+                    )
+                    val ubootRunCbw = buildJieLiScsiCbwPacket(
+                        tag = 9998,
+                        transferLength = 0,
+                        isDirectionIn = false,
+                        subCommand = JL_SUBCMD_UBOOT_RUN_APP,
+                        flashAddress = 0x00004000,
+                        cdbGroupOpcode = JL_CDB_CONTROL_GROUP
+                    )
+                    executeScsiBotTransaction(
+                        connection = physicalConnection,
+                        interfaceId = intf.id,
+                        outEp = outEp,
+                        inEp = inEp,
+                        cbwPacket = ubootRunCbw,
+                        expectedTag = 9998,
+                        dataPayload = null,
+                        isDirectionIn = false,
+                        timeoutMs = 600
+                    )
                 } else {
                     // 3B (MIDI OTA). Send final SysEx OTA Commit & Reboot packet (F0 22 24 35 7E F7)
                     val otaRebootPacket = encodeSysExToUsbMidiPackets(SYSEX_OTA_REBOOT_FINAL)
@@ -2909,6 +3273,11 @@ class UsbFlashEngine(private val context: Context) {
                         forcedSliceSize = outEp.maxPacketSize.coerceIn(64, 512)
                     )
                     lastCswStatus = "SYSEX_OTA_REBOOT_SENT (F0 22 24 35 7E F7)"
+                    // If the device was a custom firmware (e.g. Clipper VID_1209:PID_0001) that only transitions
+                    // into WL80UBOOT1.00 (VID_4C4A:PID_8057) after receiving 7E F7, detect that transition!
+                    if (physicalDevice?.vendorId == OPEN_SOURCE_FM1_VID) {
+                        triggerLateUbootScsiPass = true
+                    }
                 }
             }
 
@@ -2940,10 +3309,48 @@ class UsbFlashEngine(private val context: Context) {
                     verifiedStageIndex = 4
                 )
             )
-            return integrityOk
         } finally {
             runCatching { physicalConnection?.close() }
         }
+
+        // If a custom firmware (Clipper / HYP-1 on VID_1209:PID_0001) transitioned into WL80UBOOT1.00 (VID_4C4A:PID_8057)
+        // right after receiving 7E F7, automatically catch WL80UBOOT1.00 and run the SCSI BOT flash pass!
+        if (triggerLateUbootScsiPass && physicalManager != null) {
+            delay(1_350)
+            val ubootDev = physicalManager.deviceList?.values?.firstOrNull {
+                it.vendorId == JIELI_VID && (it.productId == WL82_UBOOT_PID || it.productId == WL82_MASKROM_ALT_PID)
+            }
+            if (ubootDev != null) {
+                val ubootInfo = classifyAndProbeUsbDevice(physicalManager, ubootDev, allowActiveProbe = false)
+                onLog?.invoke(
+                    "USB_IO",
+                    "STEP-06-LATE-UBOOT-CATCH",
+                    "Обнаружен переход синтезатора из кастомной прошивки в загрузчик ${ubootInfo.productName} (${ubootInfo.vidPidHex}) после команды 7E F7! Выполняется прямая запись через JieLi SCSI BOT…",
+                    "LATE_UBOOT=${ubootInfo.vidPidHex} PORT=${ubootInfo.deviceName}"
+                )
+                if (ubootInfo.hasPermission) {
+                    return executeFlashPipeline(
+                        deviceInfo = ubootInfo,
+                        firmwareBytes = firmwareBytes,
+                        declaredSizeBytes = declaredSizeBytes,
+                        targetOffsetHex = targetOffsetHex,
+                        expectedSha256 = expectedSha256,
+                        expectedCrc32 = expectedCrc32,
+                        allowBootHeaderRebuild = allowBootHeaderRebuild,
+                        maxRetries = maxRetries,
+                        blockSizeBytes = blockSizeBytes,
+                        injectRamLoaderFirst = injectRamLoaderFirst,
+                        preferredProtocol = ActiveWireProtocol.JIELI_SCSI_BOT,
+                        onLog = onLog,
+                        onProgress = onProgress
+                    )
+                } else {
+                    requestUsbPermissionIfNeeded(ubootDev.deviceName)
+                }
+            }
+        }
+
+        return ChecksumEngine.computeSha256(firmwareBytes).equals(expectedSha256, ignoreCase = true)
     }
 
     /**

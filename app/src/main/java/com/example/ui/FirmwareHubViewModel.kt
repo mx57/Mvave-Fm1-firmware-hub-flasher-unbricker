@@ -1570,12 +1570,21 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 activeDev = bootstrapOutcome.updatedDevice
                 _connectedDevice.value = activeDev
 
-                val resolvedProtocolForPipeline = if (bootstrapOutcome.usedSysExOtaFallback) {
-                    ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                } else if (_flashSessionState.value.activeWireProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL) {
-                    bootstrapOutcome.resolvedProtocol
-                } else {
-                    _flashSessionState.value.activeWireProtocol
+                val resolvedProtocolForPipeline = when {
+                    activeDev.vendorId == UsbFlashEngine.JIELI_VID &&
+                        (activeDev.productId == UsbFlashEngine.WL82_UBOOT_PID ||
+                            activeDev.productId == UsbFlashEngine.WL82_MASKROM_ALT_PID) -> {
+                        ActiveWireProtocol.JIELI_SCSI_BOT
+                    }
+                    bootstrapOutcome.usedSysExOtaFallback -> {
+                        ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                    }
+                    _flashSessionState.value.activeWireProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL -> {
+                        bootstrapOutcome.resolvedProtocol
+                    }
+                    else -> {
+                        _flashSessionState.value.activeWireProtocol
+                    }
                 }
 
                 _flashSessionState.update {
@@ -1646,12 +1655,14 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     expectedCrc = report.crc32
                 }
 
+                val effectiveDeclaredSize = maxOf(payloadToWrite.size, downloadedFw.sizeBytes)
+
                 // Stage 4 & 5: Execute Dual-Protocol (SysEx OTA + SCSI CBW/CSW) write with MaxPacketSize slicing, auto-retry, and Read-Back verification.
                 // Note: injectRamLoaderFirst = false because Stage 2 already performed SRAM bootstrap / SysEx OTA handshake!
                 val ok = usbEngine.executeFlashPipeline(
                     deviceInfo = activeDev,
                     firmwareBytes = payloadToWrite,
-                    declaredSizeBytes = downloadedFw.sizeBytes,
+                    declaredSizeBytes = effectiveDeclaredSize,
                     targetOffsetHex = targetOffset,
                     expectedSha256 = expectedSha,
                     expectedCrc32 = expectedCrc,

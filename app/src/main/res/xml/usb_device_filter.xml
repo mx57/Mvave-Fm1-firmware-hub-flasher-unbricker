@@ -11,6 +11,10 @@
     <usb-device vendor-id="8740" product-id="13693" /> <!-- 0x2224:0x357D M-VAVE Boot Trigger / OTA -->
     <usb-device vendor-id="8740" />
 
+    <!-- Open-Source FM-1 Custom Firmware USB-MIDI (pid.codes VID 0x1209 = 4617, PID 0x0001 = 1: Clipper, HYP-1, SLOOP, Felucca) -->
+    <usb-device vendor-id="4617" product-id="1" />
+    <usb-device vendor-id="4617" />
+
     <!-- Seeed Studio XIAO RP2040 / Raspberry Pi Pico FM-1 Transporter Bridge (VID 0x2E8A = 11914) -->
     <usb-device vendor-id="11914" product-id="10" />    <!-- 0x2E8A:0x000A RP2040 CDC Serial Bridge -->
     <usb-device vendor-id="11914" product-id="3" />     <!-- 0x2E8A:0x0003 RP2040 UF2 Boot -->

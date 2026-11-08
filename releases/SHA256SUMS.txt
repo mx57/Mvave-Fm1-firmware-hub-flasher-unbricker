@@ -2,3 +2,4 @@
 51fd6a0a364afda68520f2d353044b9bfc611baf3535aae2720925093611f710  releases/FM1-FirmwareHub-Unbricker-v6.0-wire-ota-scsi-debug.apk
 af5803c2cd3127abb6af7cd6876ca3f6d21f736bf5ea5d88f6bf1019e54be871  releases/FM1-FirmwareHub-Unbricker-v6.1-sram-ota-fix-debug.apk
 488ef08908d2b01e4c481cdc8b0d63a4ac29f61efeb3851ab6eccd1fbbca3b19  releases/FM1-FirmwareHub-Unbricker-v6.2-wl80uboot-clipper-fix-debug.apk
+0a44109ed132e2a866cd30768a4c35261f6abd30dffea5af13e3bd699e018036  releases/FM1-FirmwareHub-Unbricker-v6.3-direct-otg-jieli-loader-debug.apk

@@ -1,5 +1,6 @@
 package com.example.ui
 
+import kotlinx.coroutines.Dispatchers
 import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
@@ -346,6 +347,12 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             repository.ensureSeeded()
             refreshUsbConnection()
+            while (true) {
+                delay(2500)
+                if (!_flashSessionState.value.isFlashing && !_flashSessionState.value.isBootloopCatcherActive) {
+                    refreshUsbConnection(showToastOnScan = false)
+                }
+            }
         }
     }
 
@@ -509,6 +516,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun refreshUsbConnection(showToastOnScan: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
         val isBusyFlashing = _flashSessionState.value.isFlashing || _flashSessionState.value.isBootloopCatcherActive
         val physicalDevices = usbEngine.scanPhysicalUsbDevices(allowActiveProbe = !isBusyFlashing)
         if (physicalDevices.isNotEmpty() && !_useSimulationMode.value) {
@@ -558,7 +566,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                         hexPayload = "STATE=REENUMERATING"
                     )
                 }
-                return
+                return@launch
             }
             val disconnected = usbEngine.buildDisconnectedDevice(
                 suspectHardBrick = _suspectHardBrickCableConnected.value
@@ -581,6 +589,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     hexPayload = disconnected.usbInterfaceSummary
                 )
             }
+        }
         }
     }
 
@@ -1463,7 +1472,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
             _selectedFirmware.value ?: filteredFirmwares.value.firstOrNull()
         } ?: return
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             refreshUsbConnection(showToastOnScan = false)
             val dev = _connectedDevice.value
 
@@ -1560,71 +1569,79 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     dev
                 }
 
-                // Stage 2: Initialize bootloader (`wl82loader.bin` in SRAM 0x010000 OR automatic fallback to USB-MIDI SysEx OTA with MaxPacketSize slicing)
-                val bootstrapOutcome = usbEngine.injectWl82LoaderToSramWithOutcome(
-                    deviceInfo = activeDev,
-                    preferredProtocol = _flashSessionState.value.activeWireProtocol
-                ) { level, tag, msg, hex ->
-                    repository.log(level, tag, msg, hex)
-                }
-                activeDev = bootstrapOutcome.updatedDevice
-                _connectedDevice.value = activeDev
+                val isBootloaderScsi = !activeDev.isSimulated &&
+                    (activeDev.productId == UsbFlashEngine.WL82_UBOOT_PID ||
+                        activeDev.productId == UsbFlashEngine.WL82_MASKROM_ALT_PID)
 
-                val resolvedProtocolForPipeline = when {
-                    activeDev.vendorId == UsbFlashEngine.JIELI_VID &&
-                        (activeDev.productId == UsbFlashEngine.WL82_UBOOT_PID ||
-                            activeDev.productId == UsbFlashEngine.WL82_MASKROM_ALT_PID) -> {
-                        ActiveWireProtocol.JIELI_SCSI_BOT
-                    }
-                    bootstrapOutcome.usedSysExOtaFallback -> {
-                        ActiveWireProtocol.USB_MIDI_SYSEX_OTA
-                    }
-                    _flashSessionState.value.activeWireProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL -> {
-                        bootstrapOutcome.resolvedProtocol
-                    }
-                    else -> {
-                        _flashSessionState.value.activeWireProtocol
-                    }
-                }
-
-                _flashSessionState.update {
-                    it.copy(
-                        wl82LoaderInjected = true,
-                        verifiedWizardStages = it.verifiedWizardStages + setOf(0, 1)
-                    )
-                }
-
-                // Stage 3: Auto-backup current EEPROM/presets & 0x0000-0x3FFF before writing
-                if (_flashSessionState.value.autoBackupBeforeFlash || isUnbrickRecovery) {
-                    val stamp = SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault()).format(Date())
-                    val eepromDump = usbEngine.readEepromBackupFromDevice(activeDev) { l, t, m, h ->
-                        repository.log(l, t, m, h)
-                    }
-                    val eepromReport = ChecksumEngine.analyzeBinary(eepromDump, "auto_backup.bin", "0x00000000")
-                    repository.insertBackup(
-                        BackupDumpEntity(
-                            title = "Авто-бэкап перед ${if (isUnbrickRecovery) "Unbrick" else "прошивкой"} ${downloadedFw.name} ($stamp)",
-                            deviceName = activeDev.productName,
-                            deviceMode = activeDev.profileType.protocolBadge,
-                            regionHex = "0x00000000 – 0x0000FFFF (WL82 Boot + 64 Presets)",
-                            sizeBytes = eepromDump.size,
-                            presetCount = 64,
-                            sha256 = eepromReport.sha256,
-                            crc32 = eepromReport.crc32,
-                            md5 = eepromReport.md5,
-                            rawHexPreview = eepromReport.headerHexPreview,
-                            presetsJson = """{"auto_backup":true,"method":"${_flashSessionState.value.selectedUnbrickMethod.name}","target_firmware":"${downloadedFw.name}","version":"${downloadedFw.version}","protected_boot":"0x0000-0x3FFF"}""",
-                            notes = "Автоматическая точка восстановления перед записью ${downloadedFw.name} (${downloadedFw.version})."
-                        )
-                    )
-                    repository.log(
-                        level = "INFO",
-                        tag = "STEP-04B-AUTO-BACKUP",
-                        message = "Сохранена резервная копия SPI Flash и заголовка загрузчика 0x0000–0x3FFF (CRC32: ${eepromReport.crc32}).",
-                        hexPayload = "BACKUP_REGION=0x0000_0xFFFF"
-                    )
+                var usedSysExOtaFallback = false
+                var fallbackChunkSize = 64
+                val resolvedProtocolForPipeline: ActiveWireProtocol
+                if (isBootloaderScsi) {
+                    resolvedProtocolForPipeline = ActiveWireProtocol.JIELI_SCSI_BOT
                     _flashSessionState.update {
-                        it.copy(verifiedWizardStages = it.verifiedWizardStages + 2)
+                        it.copy(
+                            wl82LoaderInjected = true,
+                            verifiedWizardStages = it.verifiedWizardStages + setOf(0, 1, 2)
+                        )
+                    }
+                } else {
+                    // For simulated or non-UBOOT devices: execute Stage 2 bootstrap
+                    val bootstrapOutcome = usbEngine.injectWl82LoaderToSramWithOutcome(
+                        deviceInfo = activeDev,
+                        preferredProtocol = _flashSessionState.value.activeWireProtocol
+                    ) { level, tag, msg, hex ->
+                        repository.log(level, tag, msg, hex)
+                    }
+                    activeDev = bootstrapOutcome.updatedDevice
+                    _connectedDevice.value = activeDev
+                    usedSysExOtaFallback = bootstrapOutcome.usedSysExOtaFallback
+                    fallbackChunkSize = bootstrapOutcome.chunkSizeBytes
+
+                    resolvedProtocolForPipeline = when {
+                        bootstrapOutcome.usedSysExOtaFallback -> ActiveWireProtocol.USB_MIDI_SYSEX_OTA
+                        _flashSessionState.value.activeWireProtocol == ActiveWireProtocol.AUTO_DUAL_PROTOCOL -> bootstrapOutcome.resolvedProtocol
+                        else -> _flashSessionState.value.activeWireProtocol
+                    }
+
+                    _flashSessionState.update {
+                        it.copy(
+                            wl82LoaderInjected = true,
+                            verifiedWizardStages = it.verifiedWizardStages + setOf(0, 1)
+                        )
+                    }
+
+                    // Stage 3: Auto-backup current EEPROM/presets before writing
+                    if (_flashSessionState.value.autoBackupBeforeFlash || isUnbrickRecovery) {
+                        val stamp = SimpleDateFormat("dd.MM HH:mm:ss", Locale.getDefault()).format(Date())
+                        val eepromDump = usbEngine.readEepromBackupFromDevice(activeDev) { l, t, m, h ->
+                            repository.log(l, t, m, h)
+                        }
+                        val eepromReport = ChecksumEngine.analyzeBinary(eepromDump, "auto_backup.bin", "0x00000000")
+                        repository.insertBackup(
+                            BackupDumpEntity(
+                                title = "Авто-бэкап перед ${if (isUnbrickRecovery) "Unbrick" else "прошивкой"} ${downloadedFw.name} ($stamp)",
+                                deviceName = activeDev.productName,
+                                deviceMode = activeDev.profileType.protocolBadge,
+                                regionHex = "0x00000000 – 0x0000FFFF (WL82 Boot + 64 Presets)",
+                                sizeBytes = eepromDump.size,
+                                presetCount = 64,
+                                sha256 = eepromReport.sha256,
+                                crc32 = eepromReport.crc32,
+                                md5 = eepromReport.md5,
+                                rawHexPreview = eepromReport.headerHexPreview,
+                                presetsJson = """{"auto_backup":true,"method":"${_flashSessionState.value.selectedUnbrickMethod.name}","target_firmware":"${downloadedFw.name}","version":"${downloadedFw.version}","protected_boot":"0x0000-0x3FFF"}""",
+                                notes = "Автоматическая точка восстановления перед записью ${downloadedFw.name} (${downloadedFw.version})."
+                            )
+                        )
+                        repository.log(
+                            level = "INFO",
+                            tag = "STEP-04B-AUTO-BACKUP",
+                            message = "Сохранена резервная копия SPI Flash и заголовка загрузчика 0x0000–0x3FFF (CRC32: ${eepromReport.crc32}).",
+                            hexPayload = "BACKUP_REGION=0x0000_0xFFFF"
+                        )
+                        _flashSessionState.update {
+                            it.copy(verifiedWizardStages = it.verifiedWizardStages + 2)
+                        }
                     }
                 }
 
@@ -1694,7 +1711,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 val simPrefix = if (activeDev.isSimulated) "[ТЕСТОВАЯ СИМУЛЯЦИЯ] " else ""
                 val methodLabel = _flashSessionState.value.selectedUnbrickMethod.shortBadge
                 val protoLabel = resolvedProtocolForPipeline.shortBadge
-                val fallbackBadge = if (bootstrapOutcome.usedSysExOtaFallback) " [Авто-переход с 0x10000 на SysEx OTA • Пакеты ${bootstrapOutcome.chunkSizeBytes}B]" else ""
+                val fallbackBadge = if (usedSysExOtaFallback) " [Авто-переход на SysEx OTA • Пакеты ${fallbackChunkSize}B]" else ""
                 val doneText = if (isUnbrickRecovery) {
                     "${simPrefix}UNBRICK УСПЕШЕН ($methodLabel • $protoLabel)$fallbackBadge: порт загрузчика ${activeDev.vidPidHex} перехвачен после гашения экрана, прошивка «${downloadedFw.name} (${downloadedFw.version})» записана по смещению $targetOffset и верифицирована (CRC32: $expectedCrc)!"
                 } else {
@@ -1720,7 +1737,8 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                 }
                 _statusBannerMessage.value = doneText
             } catch (e: Exception) {
-                val errText = "Ошибка операции прошивки: ${e.localizedMessage}"
+                android.util.Log.e("FirmwareHubVM", "Flash pipeline exception", e)
+                val errText = "Ошибка операции прошивки: ${e.message ?: e.javaClass.simpleName}"
                 repository.log(
                     level = "ERROR",
                     tag = "FLASH-ERR",

@@ -139,6 +139,56 @@ object ChecksumEngine {
     }
 
     /**
+     * JieLi UFW LFSR cipher key 0xFFFF with polynomial 0x1021 (self-inverse).
+     */
+    fun decryptJieLiLfsr(buf: ByteArray): ByteArray {
+        val out = buf.copyOf()
+        var k = 0xFFFF
+        for (i in out.indices) {
+            out[i] = (out[i].toInt() xor (k and 0xFF)).toByte()
+            k = ((k shl 1) xor (if ((k and 0x8000) != 0) 0x1021 else 0)) and 0xFFFF
+        }
+        return out
+    }
+
+    /**
+     * Authentic parser for FM-1 .fwsc packages:
+     * 1. Strips 20 markers to get UFW logical image.
+     * 2. Decrypts UFW header and locates type-0 entry (flash.bin).
+     * 3. Extracts exactly the 585,728-byte (0x8F000) payload for flash address 0x00004000.
+     */
+    fun extractFirmwarePayloadFromFwsc(fwscBytes: ByteArray): ByteArray {
+        val logical = unpackFwscLogicalImage(fwscBytes)
+        if (logical.size < 0x400) return logical
+
+        val hdr = decryptJieLiLfsr(logical.copyOfRange(0, 0x40))
+        val nent = (hdr[8].toInt() and 0xFF) or ((hdr[9].toInt() and 0xFF) shl 8)
+        if (nent in 1..16) {
+            for (i in 0 until nent) {
+                val start = 0x40 + i * 0x50
+                if (start + 0x50 <= logical.size) {
+                    val entry = decryptJieLiLfsr(logical.copyOfRange(start, start + 0x50))
+                    val type = (entry[0].toInt() and 0xFF) or ((entry[1].toInt() and 0xFF) shl 8)
+                    if (type == 0) { // flash.bin
+                        val off = (entry[8].toLong() and 0xFF) or
+                                ((entry[9].toLong() and 0xFF) shl 8) or
+                                ((entry[10].toLong() and 0xFF) shl 16) or
+                                ((entry[11].toLong() and 0xFF) shl 24)
+                        val appStart = (off + 0x4000).toInt()
+                        val appLen = 585728 // 0x8F000 bytes (0x4000..0x92FFF)
+                        if (appStart + appLen <= logical.size) {
+                            return logical.copyOfRange(appStart, appStart + appLen)
+                        } else if (appStart < logical.size) {
+                            return logical.copyOfRange(appStart, logical.size)
+                        }
+                    }
+                }
+            }
+        }
+        return logical
+    }
+
+    /**
      * Unpacks an official or community `.fwsc` container (or raw `.bin` dump) using `fm1_extract_app` rules:
      * - If `.fwsc`, first strips the 20 interleaved container marker bytes across the first 20x48-byte blocks (`unpackFwscLogicalImage`)
      * - Detects `.fwsc` container wrappers or dangerous 0x0000 boot headers prepended to the image

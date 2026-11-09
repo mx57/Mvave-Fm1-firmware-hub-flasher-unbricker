@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -58,6 +61,8 @@ import java.util.Locale
 
 @Composable
 fun LogsAndDocsScreen(
+    appLanguage: AppLanguage = AppLanguage.RU,
+
     logs: List<FlashLogEntity>,
     selectedLogLevel: String,
     selectedDesktopOs: String,

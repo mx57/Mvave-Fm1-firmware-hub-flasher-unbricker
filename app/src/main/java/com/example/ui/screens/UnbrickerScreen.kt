@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -84,6 +87,8 @@ import com.example.ui.theme.SynthPhosphor
 
 @Composable
 fun UnbrickerScreen(
+    appLanguage: AppLanguage = AppLanguage.RU,
+
     connectedDevice: ConnectedUsbDeviceInfo,
     selectedFirmware: FirmwareEntity?,
     useSimulationMode: Boolean,

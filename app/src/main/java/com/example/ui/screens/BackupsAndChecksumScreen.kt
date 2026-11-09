@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -57,6 +60,8 @@ import java.util.Locale
 
 @Composable
 fun BackupsAndChecksumScreen(
+    appLanguage: AppLanguage = AppLanguage.RU,
+
     selectedFirmware: FirmwareEntity?,
     checksumReport: ChecksumReport?,
     customExpectedHash: String,

@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -94,6 +97,8 @@ import com.example.ui.theme.SynthPhosphor
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CatalogScreen(
+    appLanguage: AppLanguage = AppLanguage.RU,
+
     firmwares: List<FirmwareEntity>,
     totalCatalogCount: Int,
     downloadedCount: Int,
@@ -292,7 +297,7 @@ fun CatalogScreen(
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Синхр. Hub",
+                                text = if (appLanguage == AppLanguage.EN) "Sync Hub" else "Синхр. Hub",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -324,7 +329,7 @@ fun CatalogScreen(
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Скачать все ($totalCatalogCount)",
+                                text = if (appLanguage == AppLanguage.EN) "Download all ($totalCatalogCount)" else "Скачать все ($totalCatalogCount)",
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -436,7 +441,7 @@ fun CatalogScreen(
                             onClick = { onSelectCategory(category) },
                             label = {
                                 Text(
-                                    text = category.displayName,
+                                    text = AppStrings.categoryName(category, appLanguage),
                                     style = MaterialTheme.typography.labelLarge
                                 )
                             },
@@ -466,7 +471,7 @@ fun CatalogScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                         },
-                        label = { Text("Избранные") }
+                        label = { Text(AppStrings.favoritesOnly(appLanguage)) }
                     )
 
                     SortOption.entries.forEach { option ->
@@ -563,6 +568,7 @@ fun CatalogScreen(
             items(firmwares, key = { it.id }) { firmware ->
                 FirmwareCatalogCard(
                     firmware = firmware,
+                    appLanguage = appLanguage,
                     onToggleFavorite = { onToggleFavoriteFirmware(firmware) },
                     onDownloadBinary = { onDownloadSingleFirmware(firmware) },
                     onExportBinary = { onExportFirmwareFile(firmware) },
@@ -579,6 +585,7 @@ fun CatalogScreen(
 @Composable
 private fun FirmwareCatalogCard(
     firmware: FirmwareEntity,
+    appLanguage: AppLanguage = AppLanguage.RU,
     onToggleFavorite: () -> Unit,
     onDownloadBinary: () -> Unit,
     onExportBinary: () -> Unit,
@@ -982,7 +989,7 @@ private fun FirmwareCatalogCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Экран деталей",
+                        text = if (appLanguage == AppLanguage.EN) "Details" else "Экран деталей",
                         style = MaterialTheme.typography.labelLarge,
                         color = SynthOrange
                     )
@@ -1015,7 +1022,7 @@ private fun FirmwareCatalogCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (firmware.isDownloaded) "Экспорт" else "Скачать",
+                        text = if (firmware.isDownloaded) (if (appLanguage == AppLanguage.EN) "Export" else "Экспорт") else (if (appLanguage == AppLanguage.EN) "Download" else "Скачать"),
                         color = if (firmware.isDownloaded) SynthCyan else SynthPhosphor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -1037,7 +1044,7 @@ private fun FirmwareCatalogCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Эмулятор",
+                        text = if (appLanguage == AppLanguage.EN) "Emulator" else "Эмулятор",
                         color = SynthCyan,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -1062,7 +1069,7 @@ private fun FirmwareCatalogCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (firmware.isOfficialStock) "Unbrick" else "Прошить",
+                        text = if (firmware.isOfficialStock) "Unbrick" else (if (appLanguage == AppLanguage.EN) "Flash" else "Прошить"),
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis

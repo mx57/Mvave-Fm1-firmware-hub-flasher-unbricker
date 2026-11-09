@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">FM1 FirmwareHub</string>
+    <string name="header_subtitle">THEFIRMWAREHUB.COM • M-VAVE FM-1 ПРОШИВКА И ВОССТАНОВЛЕНИЕ WL82</string>
+    <string name="nav_catalog">Каталог</string>
+    <string name="nav_flasher">Прошивка</string>
+    <string name="nav_unbricker">Unbricker</string>
+    <string name="nav_backups">Бэкапы &amp; Хэш</string>
+    <string name="nav_emulator">Эмулятор</string>
+    <string name="nav_logs_docs">Логи &amp; Гайды</string>
+    <string name="sim_mode_banner">РЕЖИМ АППАРАТНОЙ СИМУЛЯЦИИ (БЕЗ РИСКА ДЛЯ ЖЕЛЕЗА)</string>
+    <string name="usb_connected_ready">USB OTG ПОДКЛЮЧЕНО И ГОТОВО</string>
+    <string name="search_hint">Поиск по названию, автору, чипу, тегам (SLOOP, Felucca, SID)…</string>
+    <string name="sync_hub_button">Синхронизировать с TheFirmwareHub</string>
+    <string name="import_local_file">Импорт файла (.bin/.fw/.fwsc/.syx)</string>
+    <string name="flash_start_button">ЗАПУСТИТЬ АВТО-ПРОШИВКУ (0x4000)</string>
+    <string name="backup_now_button">Создать дамп EEPROM &amp; Пресетов</string>
+    <string name="verify_checksum_button">Проверить SHA-256 / CRC32 / MD5</string>
+    <string name="unbrick_soft_action">Запустить восстановление WL82 UBOOT1.00</string>
+    <string name="export_logs_button">Экспортировать журнал сессии</string>
+</resources>

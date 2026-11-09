@@ -1,6 +1,9 @@
 // File: app/src/main/java/com/example/ui/screens/EmulatorScreen.kt
 package com.example.ui.screens
 
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
@@ -121,6 +124,8 @@ private val BLACK_KEY_INDICES = setOf(1, 3, 6, 8, 10, 13, 15)
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun EmulatorScreen(
+    appLanguage: AppLanguage = AppLanguage.RU,
+
     emulatorState: EmulatorUiState,
     allFirmwares: List<FirmwareEntity>,
     onSelectActiveSlot: (EmulatorSlot) -> Unit,

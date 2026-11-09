@@ -49,13 +49,24 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-enum class AppDestination(val title: String) {
-    CATALOG("Каталог"),
-    EMULATOR("Эмулятор"),
-    FLASHER("Прошивка"),
-    UNBRICKER("Unbricker"),
-    BACKUPS("Бэкапы"),
-    LOGS_DOCS("Логи")
+enum class AppDestination(val id: String) {
+    CATALOG("catalog"),
+    EMULATOR("emulator"),
+    FLASHER("flasher"),
+    UNBRICKER("unbricker"),
+    BACKUPS("backups"),
+    LOGS_DOCS("logs_docs");
+
+    fun getTitle(lang: AppLanguage = AppLanguage.RU): String = when (this) {
+        CATALOG -> if (lang == AppLanguage.EN) "Catalog" else "Каталог"
+        EMULATOR -> if (lang == AppLanguage.EN) "Emulator" else "Эмулятор"
+        FLASHER -> if (lang == AppLanguage.EN) "Flasher" else "Прошивка"
+        UNBRICKER -> "Unbricker"
+        BACKUPS -> if (lang == AppLanguage.EN) "Backups" else "Бэкапы"
+        LOGS_DOCS -> if (lang == AppLanguage.EN) "Logs" else "Логи"
+    }
+
+    val title: String get() = getTitle(AppLanguage.RU)
 }
 
 enum class EmulatorSlot(val title: String) {
@@ -181,6 +192,20 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
 
     // Background job for Bootloop / Pin-Shorting Window Catcher
     private var bootloopCatcherJob: Job? = null
+
+    // Localization (English & Russian)
+    private val _appLanguage = MutableStateFlow(
+        if (Locale.getDefault().language.equals("ru", ignoreCase = true)) AppLanguage.RU else AppLanguage.EN
+    )
+    val appLanguage: StateFlow<AppLanguage> = _appLanguage.asStateFlow()
+
+    fun setLanguage(lang: AppLanguage) {
+        _appLanguage.value = lang
+    }
+
+    fun toggleLanguage() {
+        _appLanguage.value = _appLanguage.value.toggled()
+    }
 
     // USB & Simulation state (Simulation OFF by default — strictly requires physical USB OTG unless explicitly enabled)
     private val _useSimulationMode = MutableStateFlow(false)

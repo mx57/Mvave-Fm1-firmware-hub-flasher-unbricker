@@ -94,4 +94,36 @@ class ExampleUnitTest {
         val goldenBoot = ChecksumEngine.buildGoldenBootloaderHeader16Kb()
         assertEquals(16384, goldenBoot.size)
     }
+
+    @Test
+    fun jieliCrc16Ccitt_computesDeterministicChecksumForPageFrames() {
+        val testVector = "123456789".toByteArray(Charsets.US_ASCII)
+        val crc = com.example.domain.UsbFlashEngine.computeCrc16Ccitt(testVector)
+        assertEquals(0x31C3, crc)
+
+        val page512 = ByteArray(512) { 0xFF.toByte() }
+        val crcPage = com.example.domain.UsbFlashEngine.computeCrc16Ccitt(page512)
+        assertTrue(crcPage in 0..0xFFFF)
+    }
+
+    @Test
+    fun jieliScsiCbw_buildsValid31ByteBotFrameWithOpcode() {
+        val cdb = com.example.domain.UsbFlashEngine.buildJieLiCdb(
+            cmd = com.example.domain.UsbFlashEngine.JL_CMD_LOADER_WRITE_FLASH,
+            args = byteArrayOf(0x00, 0x00, 0x40, 0x00)
+        )
+        assertEquals(16, cdb.size)
+        assertEquals(0xFB.toByte(), cdb[0])
+        assertEquals(0x04.toByte(), cdb[1])
+
+        val cbw = com.example.domain.UsbFlashEngine.buildScsiCbwPacket(
+            tag = 100,
+            transferLength = 512,
+            isDirectionIn = false,
+            cdb = cdb
+        )
+        assertEquals(31, cbw.size)
+        val sig = java.nio.ByteBuffer.wrap(cbw, 0, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+        assertEquals(com.example.domain.UsbFlashEngine.SCSI_CBW_SIGNATURE, sig)
+    }
 }

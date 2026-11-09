@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -79,6 +82,8 @@ import java.util.Locale
 
 @Composable
 fun FlasherScreen(
+    appLanguage: AppLanguage = AppLanguage.RU,
+
     selectedFirmware: FirmwareEntity?,
     checksumReport: ChecksumReport?,
     connectedDevice: ConnectedUsbDeviceInfo,
@@ -209,7 +214,7 @@ fun FlasherScreen(
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("Скан OTG", style = MaterialTheme.typography.labelSmall)
+                            Text(if (appLanguage == AppLanguage.EN) "Scan OTG" else "Скан OTG", style = MaterialTheme.typography.labelSmall)
                         }
                     }
 
@@ -898,11 +903,11 @@ fun FlasherScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = when {
-                                flashState.isFlashing -> "ИДЕТ ПРОШИВКА И ВЕРИФИКАЦИЯ…"
-                                !connectedDevice.isConnected -> "НЕТ USB OTG УСТРОЙСТВА (ПРОШИВКА ЗАБЛОКИРОВАНА)"
-                                !connectedDevice.hasPermission && !connectedDevice.isSimulated -> "ПОДТВЕРДИТЕ ДОСТУП К USB ДЛЯ ПРОШИВКИ"
-                                connectedDevice.isSimulated -> "ЗАПУСТИТЬ ТЕСТОВУЮ СИМУЛЯЦИЮ (0x00004000)"
-                                else -> "ЗАПУСТИТЬ АВТО-ПРОШИВКУ (0x00004000)"
+                                flashState.isFlashing -> if (appLanguage == AppLanguage.EN) "FLASHING & VERIFYING…" else "ИДЕТ ПРОШИВКА И ВЕРИФИКАЦИЯ…"
+                                !connectedDevice.isConnected -> if (appLanguage == AppLanguage.EN) "NO USB OTG DEVICE (FLASHING LOCKED)" else "НЕТ USB OTG УСТРОЙСТВА (ПРОШИВКА ЗАБЛОКИРОВАНА)"
+                                !connectedDevice.hasPermission && !connectedDevice.isSimulated -> if (appLanguage == AppLanguage.EN) "GRANT USB PERMISSION TO FLASH" else "ПОДТВЕРДИТЕ ДОСТУП К USB ДЛЯ ПРОШИВКИ"
+                                connectedDevice.isSimulated -> if (appLanguage == AppLanguage.EN) "START TEST SIMULATION (0x00004000)" else "ЗАПУСТИТЬ ТЕСТОВУЮ СИМУЛЯЦИЮ (0x00004000)"
+                                else -> if (appLanguage == AppLanguage.EN) "START AUTO-FLASH (0x00004000)" else "ЗАПУСТИТЬ АВТО-ПРОШИВКУ (0x00004000)"
                             },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold

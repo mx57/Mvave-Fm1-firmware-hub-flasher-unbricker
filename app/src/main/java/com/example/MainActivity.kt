@@ -53,6 +53,9 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -112,6 +115,7 @@ fun FirmwareHubApp(
 ) {
     val context = LocalContext.current
 
+    val appLanguage by viewModel.appLanguage.collectAsStateWithLifecycle()
     val currentDestination by viewModel.currentDestination.collectAsStateWithLifecycle()
     val isShowingFirmwareDetail by viewModel.isShowingFirmwareDetail.collectAsStateWithLifecycle()
     val firmwares by viewModel.filteredFirmwares.collectAsStateWithLifecycle()
@@ -256,18 +260,37 @@ fun FirmwareHubApp(
                     title = {
                         Column {
                             Text(
-                                text = "FM1 FirmwareHub & Unbricker",
+                                text = AppStrings.appHeader(appLanguage),
                                 style = MaterialTheme.typography.titleLarge,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = "${connectedDevice.diagnosticVerdict.badgeTitle} (${connectedDevice.vidPidHex}) • Каталог: $totalCatalogCount",
+                                text = "${connectedDevice.diagnosticVerdict.badgeTitle} (${connectedDevice.vidPidHex}) • ${AppStrings.catalogCount(totalCatalogCount, appLanguage)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = topStatusColor,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                        }
+                    },
+                    actions = {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, SynthCyan.copy(alpha = 0.5f)),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            TextButton(
+                                onClick = { viewModel.toggleLanguage() },
+                                modifier = Modifier.testTag("language_toggle_button")
+                            ) {
+                                Text(
+                                    text = if (appLanguage == AppLanguage.EN) "🇬🇧 EN" else "🇷🇺 RU",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = SynthCyan
+                                )
+                            }
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -291,12 +314,12 @@ fun FirmwareHubApp(
                                 icon = {
                                     Icon(
                                         imageVector = destinationIcon(dest),
-                                        contentDescription = dest.title
+                                        contentDescription = AppStrings.navTitle(dest, appLanguage)
                                     )
                                 },
                                 label = {
                                     Text(
-                                        text = dest.title,
+                                        text = AppStrings.navTitle(dest, appLanguage),
                                         style = MaterialTheme.typography.labelSmall,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
@@ -333,10 +356,10 @@ fun FirmwareHubApp(
                                 icon = {
                                     Icon(
                                         imageVector = destinationIcon(dest),
-                                        contentDescription = dest.title
+                                        contentDescription = AppStrings.navTitle(dest, appLanguage)
                                     )
                                 },
-                                label = { Text(dest.title) }
+                                label = { Text(AppStrings.navTitle(dest, appLanguage)) }
                             )
                         }
                     }
@@ -389,6 +412,7 @@ fun FirmwareHubApp(
                                 val detailFw = selectedFirmware
                                 if (isShowingFirmwareDetail && detailFw != null) {
                                     FirmwareDetailScreen(
+                                        appLanguage = appLanguage,
                                         firmware = detailFw,
                                         checksumReport = checksumReport,
                                         isDownloading = isDownloadingFirmware,
@@ -422,6 +446,7 @@ fun FirmwareHubApp(
                                     )
                                 } else {
                                     CatalogScreen(
+                                        appLanguage = appLanguage,
                                         firmwares = firmwares,
                                         totalCatalogCount = totalCatalogCount,
                                         downloadedCount = downloadedCatalogCount,
@@ -470,6 +495,7 @@ fun FirmwareHubApp(
                             }
 
                             AppDestination.EMULATOR -> EmulatorScreen(
+                                appLanguage = appLanguage,
                                 emulatorState = emulatorState,
                                 allFirmwares = firmwares,
                                 onSelectActiveSlot = viewModel::selectActiveEmulatorSlot,
@@ -501,6 +527,7 @@ fun FirmwareHubApp(
                             )
 
                             AppDestination.FLASHER -> FlasherScreen(
+                                appLanguage = appLanguage,
                                 selectedFirmware = selectedFirmware,
                                 checksumReport = checksumReport,
                                 connectedDevice = connectedDevice,
@@ -532,6 +559,7 @@ fun FirmwareHubApp(
                             )
 
                             AppDestination.UNBRICKER -> UnbrickerScreen(
+                                appLanguage = appLanguage,
                                 connectedDevice = connectedDevice,
                                 selectedFirmware = selectedFirmware,
                                 useSimulationMode = useSimulationMode,
@@ -573,6 +601,7 @@ fun FirmwareHubApp(
                             )
 
                             AppDestination.BACKUPS -> BackupsAndChecksumScreen(
+                                appLanguage = appLanguage,
                                 selectedFirmware = selectedFirmware,
                                 checksumReport = checksumReport,
                                 customExpectedHash = customExpectedHash,
@@ -602,6 +631,7 @@ fun FirmwareHubApp(
                             )
 
                             AppDestination.LOGS_DOCS -> LogsAndDocsScreen(
+                                appLanguage = appLanguage,
                                 logs = logs,
                                 selectedLogLevel = selectedLogLevel,
                                 selectedDesktopOs = selectedDesktopOs,

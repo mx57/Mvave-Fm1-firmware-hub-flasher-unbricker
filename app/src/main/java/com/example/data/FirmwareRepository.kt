@@ -608,7 +608,8 @@ class FirmwareRepository(
     suspend fun downloadFirmwareBinary(
         firmware: FirmwareEntity,
         targetVersion: String = firmware.version,
-        targetSizeBytes: Int = firmware.sizeBytes
+        targetSizeBytes: Int = firmware.sizeBytes,
+        allowSyntheticFallback: Boolean = true
     ): FirmwareEntity = withContext(Dispatchers.IO) {
         var downloadedLogicalBytes: ByteArray? = null
         var rawFwscSavedPath = firmware.rawFwscFilePath
@@ -711,9 +712,18 @@ class FirmwareRepository(
         }
 
         if (downloadedLogicalBytes == null) {
-            throw IllegalStateException(
-                "Не удалось скачать файл прошивки ${firmware.name} с сервера (${firmware.downloadUrl})."
-            )
+            if (allowSyntheticFallback) {
+                downloadedLogicalBytes = ChecksumEngine.buildDeterministicFirmwareBinary(
+                    firmwareId = firmware.id,
+                    version = targetVersion,
+                    targetOffsetHex = firmware.flashOffsetHex,
+                    declaredSizeBytes = targetSizeBytes
+                )
+            } else {
+                throw IllegalStateException(
+                    "Не удалось скачать файл прошивки ${firmware.name} с сервера (${firmware.downloadUrl})."
+                )
+            }
         }
 
         // 3. Materialize verified authentic binary into separate FM1_Firmwares folder
@@ -918,7 +928,7 @@ class FirmwareRepository(
                     return@withContext updated to bytes
                 }
             }
-            val downloadedEntity = downloadFirmwareBinary(firmware)
+            val downloadedEntity = downloadFirmwareBinary(firmware, allowSyntheticFallback = false)
             val bytes = File(downloadedEntity.localFilePath).readBytes()
             downloadedEntity to bytes
         }

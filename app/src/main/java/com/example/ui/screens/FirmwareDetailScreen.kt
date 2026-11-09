@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import com.example.ui.AppLanguage
+import com.example.ui.AppStrings
+
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +71,8 @@ import com.example.ui.theme.SynthPhosphor
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FirmwareDetailScreen(
+    appLanguage: AppLanguage = AppLanguage.RU,
+
     firmware: FirmwareEntity,
     checksumReport: ChecksumReport?,
     isDownloading: Boolean,

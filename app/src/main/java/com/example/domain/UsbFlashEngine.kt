@@ -3017,6 +3017,11 @@ class UsbFlashEngine(private val context: Context) {
                 "АВАРИЙНАЯ БЛОКИРОВКА: Запись по адресу $targetOffsetHex запрещена! Область 0x0000–0x3FFF содержит загрузчик JieLi WL82. Для реконструкции загрузчика включите режим ремонта Boot Header в Unbricker."
             )
         }
+        if (baseOffset == 0x4000 && (ChecksumEngine.isUfwContainer(firmwareBytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(firmwareBytes))) {
+            throw IllegalStateException(
+                "АВАРИЙНАЯ ЗАЩИТА: Запись зашифрованного UFW-контейнера или Boot Header по смещению 0x00004000 заблокирована для предотвращения Hard-Brick!"
+            )
+        }
 
         val totalSectors = 64
         val effectiveRetries = maxRetries.coerceIn(1, 5)

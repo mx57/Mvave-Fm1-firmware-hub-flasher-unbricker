@@ -51,6 +51,37 @@ class FirmwareRepository(
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
+    init {
+        runCatching {
+            assetManager?.open("mvave_fm1_factory_boot16k.bin")?.use { stream ->
+                ChecksumEngine.authenticFactoryBootHeader16Kb = stream.readBytes()
+            }
+        }
+        sanitizeCachedFirmwaresFolder()
+    }
+
+    /**
+     * Sanitizes all files in `FM1_Firmwares/`. If any cached .bin file is an unextracted UFW container
+     * (or contains a 16 KB boot header prefix), automatically re-extracts the clean 0x00004000 application payload.
+     */
+    fun sanitizeCachedFirmwaresFolder() {
+        runCatching {
+            val files = firmwaresDir.listFiles() ?: return@runCatching
+            for (f in files) {
+                if (f.isFile && f.name.endsWith(".bin") && f.length() > 0L) {
+                    val bytes = f.readBytes()
+                    if (ChecksumEngine.isUfwContainer(bytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(bytes)) {
+                        val clean = ChecksumEngine.extractFirmwarePayloadFromFwsc(bytes)
+                        if (clean.size in 32768..900000 && clean.size != bytes.size) {
+                            f.writeBytes(clean)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+
     private fun sanitizeFileToken(raw: String): String {
         return raw.replace(Regex("[^a-zA-Z0-9._-]"), "_")
     }
@@ -830,7 +861,7 @@ class FirmwareRepository(
                                 if (fw.downloadUrl.endsWith(".fwsc")) {
                                     rawFwscFile.writeBytes(bodyBytes)
                                     resolvedFwscPath = rawFwscFile.absolutePath
-                                    resolvedBytes = unpackFwscLogicalImage(bodyBytes)
+                                    resolvedBytes = ChecksumEngine.extractFirmwarePayloadFromFwsc(bodyBytes)
                                 } else {
                                     resolvedBytes = bodyBytes
                                 }
@@ -895,7 +926,14 @@ class FirmwareRepository(
             if (firmware.localFilePath.isNotBlank()) {
                 val existingFile = File(firmware.localFilePath)
                 if (existingFile.exists() && existingFile.length() > 0L) {
-                    val bytes = existingFile.readBytes()
+                    var bytes = existingFile.readBytes()
+                    if (ChecksumEngine.isUfwContainer(bytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(bytes)) {
+                        val clean = ChecksumEngine.extractFirmwarePayloadFromFwsc(bytes)
+                        if (clean.size in 32768..900000 && clean.size != bytes.size) {
+                            bytes = clean
+                            runCatching { existingFile.writeBytes(clean) }
+                        }
+                    }
                     if (!isSyntheticPlaceholderBinary(bytes) || !firmware.downloadUrl.startsWith("http")) {
                         val actualSha = ChecksumEngine.computeSha256(bytes)
                         val actualCrc = ChecksumEngine.computeCrc32(bytes)
@@ -912,7 +950,14 @@ class FirmwareRepository(
             }
             val candidateFile = buildFirmwareFile(firmware.id, firmware.version)
             if (candidateFile.exists() && candidateFile.length() > 0L) {
-                val bytes = candidateFile.readBytes()
+                var bytes = candidateFile.readBytes()
+                if (ChecksumEngine.isUfwContainer(bytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(bytes)) {
+                    val clean = ChecksumEngine.extractFirmwarePayloadFromFwsc(bytes)
+                    if (clean.size in 32768..900000 && clean.size != bytes.size) {
+                        bytes = clean
+                        runCatching { candidateFile.writeBytes(clean) }
+                    }
+                }
                 if (!isSyntheticPlaceholderBinary(bytes) || !firmware.downloadUrl.startsWith("http")) {
                     val actualSha = ChecksumEngine.computeSha256(bytes)
                     val actualCrc = ChecksumEngine.computeCrc32(bytes)

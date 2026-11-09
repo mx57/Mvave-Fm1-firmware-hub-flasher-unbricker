@@ -126,4 +126,47 @@ class ExampleUnitTest {
         val sig = java.nio.ByteBuffer.wrap(cbw, 0, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
         assertEquals(com.example.domain.UsbFlashEngine.SCSI_CBW_SIGNATURE, sig)
     }
+
+    @Test
+    fun checksumEngine_authenticUfwDetectionAndAppExtractionPreventsHardBrick() {
+        val goldenBoot = ChecksumEngine.buildGoldenBootloaderHeader16Kb()
+        assertEquals(16384, goldenBoot.size)
+        val bootAscii = String(goldenBoot.copyOfRange(0, 32), Charsets.US_ASCII)
+        assertTrue(bootAscii.contains("AC791N_STORY"))
+
+        val plainHdr = ByteArray(0x40)
+        plainHdr[8] = 1 // nent = 1
+        "AC791N".toByteArray(Charsets.US_ASCII).copyInto(plainHdr, 16)
+        val encryptedHdr = ChecksumEngine.decryptJieLiLfsr(plainHdr)
+
+        val plainEntry = ByteArray(0x50)
+        plainEntry[0] = 0 // type = 0 (flash.bin)
+        plainEntry[8] = 0x00; plainEntry[9] = 0x01; plainEntry[10] = 0x00; plainEntry[11] = 0x00
+        val elen = 0x4000 + 4096
+        plainEntry[12] = (elen and 0xFF).toByte()
+        plainEntry[13] = ((elen shr 8) and 0xFF).toByte()
+        plainEntry[14] = ((elen shr 16) and 0xFF).toByte()
+        plainEntry[15] = ((elen shr 24) and 0xFF).toByte()
+        val encryptedEntry = ChecksumEngine.decryptJieLiLfsr(plainEntry)
+
+        val ufwPackage = ByteArray(256 + elen)
+        System.arraycopy(encryptedHdr, 0, ufwPackage, 0, 0x40)
+        System.arraycopy(encryptedEntry, 0, ufwPackage, 0x40, 0x50)
+
+        val appExpected = ByteArray(4096) { 0x42.toByte() }
+        System.arraycopy(appExpected, 0, ufwPackage, 256 + 0x4000, 4096)
+
+        assertTrue(ChecksumEngine.isUfwContainer(ufwPackage))
+        val extractedApp = ChecksumEngine.extractFirmwarePayloadFromFwsc(ufwPackage)
+        assertEquals(4096, extractedApp.size)
+        assertArrayEquals(appExpected, extractedApp)
+
+        val surgeonReport = ChecksumEngine.extractAndRepairFwscContainer(
+            rawBytes = ufwPackage,
+            fileName = "community_firmware.bin"
+        )
+        assertTrue(surgeonReport.hadFwscContainerHeader)
+        assertEquals(4096, surgeonReport.extractedAppPayload.size)
+        assertArrayEquals(appExpected, surgeonReport.extractedAppPayload)
+    }
 }

@@ -1677,6 +1677,20 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                         _flashSessionState.value.selectedUnbrickMethod == UnbrickMethodType.CH341A_FULL_DUMP_PROGRAMMER
                     )
 
+                // Absolute Hard-Brick Prevention Guard: Ensure clean 0x00004000 payload without UFW container headers
+                val safeAppBytes = if (ChecksumEngine.isUfwContainer(cleanAppBytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(cleanAppBytes)) {
+                    val extracted = ChecksumEngine.extractFirmwarePayloadFromFwsc(cleanAppBytes)
+                    repository.log(
+                        level = "WARN",
+                        tag = "STEP-04-SAFETY-GUARD",
+                        message = "Обнаружен UFW-контейнер/Boot Header в прошивке! Выполнено автоматическое извлечение чистого бинарника 0x00004000 (${extracted.size} Б). Окирпичивание предотвращено.",
+                        hexPayload = "ORIG=${cleanAppBytes.size} EXTRACTED=${extracted.size}"
+                    )
+                    extracted
+                } else {
+                    cleanAppBytes
+                }
+
                 val payloadToWrite: ByteArray
                 val targetOffset: String
                 val expectedSha: String
@@ -1684,17 +1698,17 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
 
                 if (rebuildBoot) {
                     val goldenBoot = ChecksumEngine.buildGoldenBootloaderHeader16Kb()
-                    payloadToWrite = ByteArray(goldenBoot.size + cleanAppBytes.size)
+                    payloadToWrite = ByteArray(goldenBoot.size + safeAppBytes.size)
                     System.arraycopy(goldenBoot, 0, payloadToWrite, 0, goldenBoot.size)
-                    System.arraycopy(cleanAppBytes, 0, payloadToWrite, goldenBoot.size, cleanAppBytes.size)
+                    System.arraycopy(safeAppBytes, 0, payloadToWrite, goldenBoot.size, safeAppBytes.size)
                     targetOffset = "0x00000000"
                     expectedSha = ChecksumEngine.computeSha256(payloadToWrite)
                     expectedCrc = ChecksumEngine.computeCrc32(payloadToWrite)
                 } else {
-                    payloadToWrite = cleanAppBytes
+                    payloadToWrite = safeAppBytes
                     targetOffset = "0x00004000"
-                    expectedSha = report.sha256
-                    expectedCrc = report.crc32
+                    expectedSha = ChecksumEngine.computeSha256(safeAppBytes)
+                    expectedCrc = ChecksumEngine.computeCrc32(safeAppBytes)
                 }
 
                 val effectiveDeclaredSize = maxOf(payloadToWrite.size, downloadedFw.sizeBytes)

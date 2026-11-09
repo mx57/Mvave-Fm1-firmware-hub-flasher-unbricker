@@ -1,8 +1,8 @@
 # FM1 FirmwareHub & Unbricker — Release v6.5 (Hard-Brick Immunity, Authentic UFW/FWSC Extractor & Factory Boot)
 
 - **Файл релиза:** `releases/FM1-FirmwareHub-Unbricker-v6.5-bilingual-otg-flasher-debug.apk`
-- **SHA-256:** `0882ff6b3fc420549c208f7439845cbae64ccf8bb879e581783fbb03cb85f6c1`
-- **Размер:** 28,261,701 байт
+- **SHA-256:** `263e1fe88a6855b030f60ea2feb741f36a8ed30d24e905d656324e9cddfd2662`
+- **Размер:** 28,318,504 байт
 
 ---
 

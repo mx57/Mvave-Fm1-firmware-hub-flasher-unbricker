@@ -201,12 +201,59 @@ object ChecksumEngine {
     }
 
     /**
+     * Searches for the authentic 16 KB Boot Header signature (or AC791N_STORY marker).
+     * In all official stock and community .fwsc firmwares, the 16 KB boot header begins at offset 1044 (0x414).
+     * Returns the exact start index of the boot header in [data], or -1 if not found.
+     */
+    fun findBootHeaderOffset(data: ByteArray): Int {
+        if (data.size < BOOT_HEADER_SIZE_BYTES) return -1
+        val limit = minOf(data.size - BOOT_HEADER_SIZE_BYTES, 65536)
+        for (i in 0..limit) {
+            if (i + AUTHENTIC_BOOT_HEADER_PREFIX.size <= data.size) {
+                var prefixMatch = true
+                for (j in AUTHENTIC_BOOT_HEADER_PREFIX.indices) {
+                    if (data[i + j] != AUTHENTIC_BOOT_HEADER_PREFIX[j]) {
+                        prefixMatch = false
+                        break
+                    }
+                }
+                if (prefixMatch) return i
+            }
+        }
+        val storyAscii = "AC791N_STORY".toByteArray(Charsets.US_ASCII)
+        val storyLimit = minOf(data.size - storyAscii.size, 65536)
+        for (i in 0..storyLimit) {
+            var match = true
+            for (j in storyAscii.indices) {
+                if (data[i + j] != storyAscii[j]) {
+                    match = false
+                    break
+                }
+            }
+            if (match) {
+                val start = i - 16
+                if (start >= 0) return start
+            }
+        }
+        return -1
+    }
+
+    /**
      * Authentic parser for FM-1 .fwsc / UFW packages:
-     * 1. Smartly detects whether 20 container markers need to be stripped.
-     * 2. Decrypts UFW header and locates type-0 entry (flash.bin).
-     * 3. Extracts exactly the application payload for flash address 0x00004000 (elen - 0x4000 bytes).
+     * 1. Detects boot header offset via [findBootHeaderOffset] and extracts the clean application payload
+     *    located at (bootHeaderOffset + 16384 bytes).
+     * 2. Also supports JieLi UFW entry table extraction for synthetic packages.
+     * 3. Extracts exactly the clean application binary for flash address 0x00004000.
      */
     fun extractFirmwarePayloadFromFwsc(fwscBytes: ByteArray): ByteArray {
+        val bootHdrOffset = findBootHeaderOffset(fwscBytes)
+        if (bootHdrOffset >= 0) {
+            val appStart = bootHdrOffset + BOOT_HEADER_SIZE_BYTES
+            if (appStart < fwscBytes.size && (fwscBytes.size - appStart) >= 32768) {
+                return fwscBytes.copyOfRange(appStart, fwscBytes.size)
+            }
+        }
+
         val logical = if (isLogicalUfwHeader(fwscBytes)) {
             fwscBytes
         } else if (fwscBytes.size >= 960) {
@@ -214,6 +261,14 @@ object ChecksumEngine {
             if (isLogicalUfwHeader(test)) unpackFwscLogicalImage(fwscBytes) else fwscBytes
         } else {
             fwscBytes
+        }
+
+        val logicalBootHdrOffset = findBootHeaderOffset(logical)
+        if (logicalBootHdrOffset >= 0) {
+            val appStart = logicalBootHdrOffset + BOOT_HEADER_SIZE_BYTES
+            if (appStart < logical.size && (logical.size - appStart) >= 32768) {
+                return logical.copyOfRange(appStart, logical.size)
+            }
         }
 
         if (logical.size < 0x400) return logical
@@ -275,7 +330,8 @@ object ChecksumEngine {
 
         val isFwscByName = fileName.lowercase().endsWith(".fwsc")
 
-        if (isUfwContainer(rawBytes)) {
+        val bootHdrOffset = findBootHeaderOffset(rawBytes)
+        if (bootHdrOffset >= 0 || isUfwContainer(rawBytes)) {
             val app = extractFirmwarePayloadFromFwsc(rawBytes)
             if (app.isNotEmpty() && app.size < rawBytes.size) {
                 extractedPayload = app

@@ -70,7 +70,7 @@ class FirmwareRepository(
             for (f in files) {
                 if (f.isFile && f.name.endsWith(".bin") && f.length() > 0L) {
                     val bytes = f.readBytes()
-                    if (ChecksumEngine.isUfwContainer(bytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(bytes)) {
+                    if (ChecksumEngine.isUfwContainer(bytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(bytes) || ChecksumEngine.findBootHeaderOffset(bytes) >= 0) {
                         val clean = ChecksumEngine.extractFirmwarePayloadFromFwsc(bytes)
                         if (clean.size in 32768..900000 && clean.size != bytes.size) {
                             f.writeBytes(clean)
@@ -706,6 +706,8 @@ class FirmwareRepository(
                         rawFwscFile.writeBytes(bodyBytes)
                         rawFwscSavedPath = rawFwscFile.absolutePath
                         downloadedLogicalBytes = ChecksumEngine.extractFirmwarePayloadFromFwsc(bodyBytes)
+                    } else if (ChecksumEngine.isUfwContainer(bodyBytes) || ChecksumEngine.findBootHeaderOffset(bodyBytes) >= 0) {
+                        downloadedLogicalBytes = ChecksumEngine.extractFirmwarePayloadFromFwsc(bodyBytes)
                     } else {
                         downloadedLogicalBytes = bodyBytes
                     }
@@ -927,7 +929,7 @@ class FirmwareRepository(
                 val existingFile = File(firmware.localFilePath)
                 if (existingFile.exists() && existingFile.length() > 0L) {
                     var bytes = existingFile.readBytes()
-                    if (ChecksumEngine.isUfwContainer(bytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(bytes)) {
+                    if (ChecksumEngine.isUfwContainer(bytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(bytes) || ChecksumEngine.findBootHeaderOffset(bytes) >= 0) {
                         val clean = ChecksumEngine.extractFirmwarePayloadFromFwsc(bytes)
                         if (clean.size in 32768..900000 && clean.size != bytes.size) {
                             bytes = clean

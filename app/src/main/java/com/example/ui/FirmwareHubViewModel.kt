@@ -1678,7 +1678,7 @@ class FirmwareHubViewModel(application: Application) : AndroidViewModel(applicat
                     )
 
                 // Absolute Hard-Brick Prevention Guard: Ensure clean 0x00004000 payload without UFW container headers
-                val safeAppBytes = if (ChecksumEngine.isUfwContainer(cleanAppBytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(cleanAppBytes)) {
+                val safeAppBytes = if (ChecksumEngine.isUfwContainer(cleanAppBytes) || ChecksumEngine.isFullFlashDumpWithBootHeader(cleanAppBytes) || ChecksumEngine.findBootHeaderOffset(cleanAppBytes) >= 0) {
                     val extracted = ChecksumEngine.extractFirmwarePayloadFromFwsc(cleanAppBytes)
                     repository.log(
                         level = "WARN",

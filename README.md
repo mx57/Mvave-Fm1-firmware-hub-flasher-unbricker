@@ -255,3 +255,5 @@ cd Mvave-Fm1-firmware-hub-flasher-unbricker
 
 * Сообщество и каталог прошивок: **[TheFirmwareHub.com](https://thefirmwarehub.com/)** и разработчики *aroum*, *kagaimiq*, *Quixotic7*, *Felucca DSP*, *SynthForge*.
 * Протоколы работы с чипсетом: архитектура **JieLi AC791N / WL82**.
+
+Related: try FM-1 firmwares in the browser with the free community [FM-1 Emulator](https://fm1-emulator.atst.tools/).
